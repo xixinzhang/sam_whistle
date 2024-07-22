@@ -1,0 +1,17 @@
+[project]
+name = "sam_whistle"
+version = "0.1.0"
+dependencies = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "numpy",
+    "matplotlib",
+    "pycocotools",
+    "opencv-python",
+    "tyro",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+namespaces = false

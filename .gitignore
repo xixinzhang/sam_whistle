@@ -1,0 +1,9 @@
+// This file is used to ignore files and directories in the repository
+checkpoints/*
+!checkpoints/.gitkeep
+data/*
+!data/.gitkeep
+
+__pycache__
+*.pth
+*.egg-info
