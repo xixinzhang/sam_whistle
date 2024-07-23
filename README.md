@@ -1,5 +1,7 @@
 ## Segment any whistle using foundational model SAM
 
-## Acknowledgement
+## Install
+`conda install ffmpeg`
 
+## Acknowledgement
 - [SAM](https://github.com/facebookresearch/segment-anything)

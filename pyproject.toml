@@ -10,6 +10,7 @@ dependencies = [
     "pycocotools",
     "opencv-python",
     "tyro",
+    "tqdm",
 ]
 
 [tool.setuptools.packages.find]
