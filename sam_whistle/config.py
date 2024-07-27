@@ -8,7 +8,7 @@ class Args:
     exp_name: Optional[str] = None
 
     # Data
-    path: str = 'data/dclde'
+    path: str = '/home/asher/Desktop/projects/sam_whistle/data/dclde'
     preprocess: bool = False
     # audio transfroms
     n_fft: Optional[int] = None

@@ -76,15 +76,17 @@ class WhistleDataset(Dataset):
         spect = np.load(spect_path)['arr_0']
         spect = np.stack([spect, spect, spect], axis=-1)
         ann_dict = self.all_ann_dict[file_id]
-        anns = ann_dict[spect_split_id] # {'contours', 'bboxes', 'masks'}
+        anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
         bboxes = []
         masks = []
+        contours = []
         height, width, _ = spect.shape
-        for contour, bbox, mask in zip(anns['contours'], anns['bboxes'], anns['masks']):
+        for contour, bbox, ma in zip(anns['contours'], anns['bboxes'], anns['masks']):
+            contours.append(contour)
             bboxes.append(bbox)
             # mask
             mask = np.zeros((height, width), dtype=np.uint8)
-            for x, y in mask:
+            for x, y in ma:
                 if x>=0 and x<width and y>=0 and y<height:
                     mask[y, x] = 1
             masks.append(mask)
@@ -92,7 +94,8 @@ class WhistleDataset(Dataset):
         # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
         bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
         masks = np.stack(masks, axis=0) # [num_obj, height, width]
-        return spect, bboxes, masks
+        contours = [np.array(contour) for contour in contours]
+        return spect, bboxes, masks, contours
 
         # if self.split == 'train':
         #     return spect, spect, torch.tensor(bboxes), torch.tensor(masks).float()
@@ -294,4 +297,6 @@ if __name__ == "__main__":
     print(args)
     dataset = WhistleDataset(args, 'train')
     print(len(dataset))
+    data = dataset[0]
+    print(data[0].shape, data[1].shape, data[2].shape)
 
