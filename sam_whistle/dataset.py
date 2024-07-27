@@ -11,7 +11,7 @@ import tyro
 import struct 
 import matplotlib.pyplot as plt
 import json
-from config import Args
+from .config import Args
 from tqdm import tqdm
 
 # from datasets.tools import ResizeAndPad
