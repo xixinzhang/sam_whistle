@@ -3,6 +3,8 @@ checkpoints/*
 !checkpoints/.gitkeep
 data/*
 !data/.gitkeep
+img/*
+!img/.gitkeep
 
 __pycache__
 *.pth

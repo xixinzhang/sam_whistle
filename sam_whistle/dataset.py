@@ -11,7 +11,7 @@ import tyro
 import struct 
 import matplotlib.pyplot as plt
 import json
-from .config import Args
+from sam_whistle.config import Args
 from tqdm import tqdm
 
 # from datasets.tools import ResizeAndPad
@@ -46,7 +46,7 @@ class WhistleDataset(Dataset):
         self.meta = self._get_dataset_meta()
         self.transform = transform
         if args.preprocess:
-            # self._wave2spect("Qx-Dd-SC03-TAT09-060516-211350", "train", empty=True)
+            # self._wave2spect("palmyra092007FS192-071012-010614", "train", empty=True)
             # self._wave2spect("palmyra092007FS192-070924-205730", "test", empty=True)
             self.preprocess(split)
         else:
@@ -71,6 +71,7 @@ class WhistleDataset(Dataset):
 
     def __getitem__(self, idx):
         spect_path = self.idx2file[idx]
+        # print(spect_path)
         file_id = spect_path.parent.name
         spect_split_id = int(spect_path.stem)
         spect = np.load(spect_path)['arr_0']
@@ -78,24 +79,24 @@ class WhistleDataset(Dataset):
         ann_dict = self.all_ann_dict[file_id]
         anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
         bboxes = []
-        masks = []
+        # masks = []
         contours = []
-        height, width, _ = spect.shape
-        for contour, bbox, ma in zip(anns['contours'], anns['bboxes'], anns['masks']):
+        # height, width, _ = spect.shape
+        for contour, bbox in zip(anns['contours'], anns['bboxes']):
             contours.append(contour)
             bboxes.append(bbox)
-            # mask
-            mask = np.zeros((height, width), dtype=np.uint8)
-            for x, y in ma:
-                if x>=0 and x<width and y>=0 and y<height:
-                    mask[y, x] = 1
-            masks.append(mask)
+            # # mask
+            # mask = np.zeros((height, width), dtype=np.uint8)
+            # for x, y in ma:
+            #     if x>=0 and x<width and y>=0 and y<height:
+            #         mask[y, x] = 1
+            # masks.append(mask)
 
         # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
         bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
-        masks = np.stack(masks, axis=0) # [num_obj, height, width]
+        # masks = np.stack(masks, axis=0) # [num_obj, height, width]
         contours = [np.array(contour) for contour in contours]
-        return spect, bboxes, masks, contours
+        return spect, bboxes, contours
 
         # if self.split == 'train':
         #     return spect, spect, torch.tensor(bboxes), torch.tensor(masks).float()
@@ -179,6 +180,7 @@ class WhistleDataset(Dataset):
             hop_length = self.args.hop_length
             hop_ms  = hop_length / info.sample_rate * 1000
             frame_ms  = n_fft / info.sample_rate * 1000
+            
         spec = F.spectrogram(waveform[0], pad = 0, window = torch.hamming_window(n_fft), n_fft=n_fft, hop_length=hop_length, win_length=n_fft, power=2, normalized=False)
         spec_db = F.amplitude_to_DB(spec, multiplier=10, amin = 1e-10, db_multiplier=0)
         spec_db = torch.flip(spec_db, [0])
@@ -195,13 +197,16 @@ class WhistleDataset(Dataset):
                 ann_dict[span_id] = {'contours':[], 'bboxes':[], 'masks':[]}
             xcoord, ycoord = contour[:, 0], contour[:, 1]
             bbox = [xcoord.min(), ycoord.min(), xcoord.max(), ycoord.max()]
-            mask_vertics = ann.astype(np.int32)
+            # mask_vertics = contour.astype(np.int32)
             ann_dict[span_id]['contours'].append(contour.tolist())
             ann_dict[span_id]['bboxes'].append(bbox)
-            ann_dict[span_id]['masks'].append(mask_vertics.tolist())
+            # ann_dict[span_id]['masks'].append(mask_vertics.tolist())
 
         for ann in tqdm(annos, desc='process annotation'):
             ann = np.array(ann)
+            # ann = np.sort(ann, axis=0)
+            sorted_indices = np.argsort(ann[:, 0])
+            ann = ann[sorted_indices]
             ann[:, 0] = ann[:, 0] * 1000 # ms
             min_time, max_time = ann[:, 0].min(), ann[:, 0].max()
             start_span_id = int(min_time // self.args.split_ms)
@@ -295,8 +300,11 @@ class WhistleDataset(Dataset):
 if __name__ == "__main__":
     args = tyro.cli(Args)
     print(args)
-    dataset = WhistleDataset(args, 'train')
-    print(len(dataset))
-    data = dataset[0]
-    print(data[0].shape, data[1].shape, data[2].shape)
+    train_set = WhistleDataset(args, 'train')
+    print("training data done")
+    # test_set = WhistleDataset(args, 'test')
+    # print("testing data done")
+    # print(len(train_set), len(test_set)) 
+    data = train_set[0]
+    print(data[0].shape, data[1].shape, len(data[2]))
 
