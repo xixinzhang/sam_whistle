@@ -4,12 +4,12 @@ import matplotlib.pyplot as plt
 def get_point_prompts(data, n_pos, n_neg= None, box_pad = None, thickness = None):
     """sample point prompt from mask.
     Args:
-        data: [contours: (n, 2)], [bbox: (4,)] [x, y]
+        data: [contours: (n, 2)] (x, y), [bbox: (4,)] [x, y]
     Returns:
         prompts: (n, (points, labels))
     """
     assert n_pos or n_neg, 'n_pos or n_neg must be provided'
-    spect, bboxes, contours = data
+    spect, bboxes, contours,_, _ = data
     height, width, _ = spect.shape
     if n_neg is None:
         n_neg = n_pos
@@ -100,22 +100,36 @@ def get_point_prompts(data, n_pos, n_neg= None, box_pad = None, thickness = None
                 neg_pts.append((x, y1))
                 neg_pts.append((x, y2))
                 
-        # if len(neg_pts) > n_neg:
-        #     neg_pts = neg_pts[:n_neg]
-        # print(len(neg_pts))
-        # print(np.array(neg_pts))
+
         points = np.concatenate((pos_pts, neg_pts), axis=0)
         labels = np.concatenate((np.ones(len(pos_pts)), np.zeros(len(neg_pts))), axis=0)
         prompts.append((points, labels))
     return prompts
 
+def sample_mask_points(mask, n_pos=None, n_neg= None):
+    """
+    
+        Args: mask: HW 
+    """
+    pos_indices = np.argwhere(mask == 1)
+    neg_indices = np.argwhere(mask == 0)
+    pos_replace = True if n_pos > len(pos_indices) else False
+    pos_sample_ids = np.random.choice(len(pos_indices), n_pos, replace=pos_replace)
+    neg_sample_ids = np.random.choice(len(neg_indices), n_neg, replace=False)
+    points = np.concatenate((pos_indices[pos_sample_ids], neg_indices[neg_sample_ids]), axis=0)
+    points = np.flip(points, axis=1).copy() # (x, y)
+    labeles = np.concatenate((np.ones(n_pos), np.zeros(n_neg)), axis=0)
+    return points, labeles
+
 def combine_masks(masks:list):
     mask = np.zeros_like(masks[0])
     for m in masks:
         mask = np.logical_or(mask, m)
-    return mask
+    return mask.astype(np.float32)
 
-# visualizations
+################ ################ ################ 
+################ visualizations  ################
+################ ################ ################ 
 def show_spect(spect:np.array, fig, save:str = None):
     ax = fig.gca()
     ax.imshow(spect[::-1], origin='lower',cmap='viridis')
@@ -144,7 +158,35 @@ def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
+        color = np.array([255/255, 0/255, 102/255, 1])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image[::-1], origin='lower',cmap='viridis')
+
+def visualize(spect, masks, points, pred_mask, save_path=None, idx=None):
+    spect = spect.squeeze().cpu().numpy()
+    masks = masks.squeeze().cpu().numpy()
+    points = [p.squeeze().cpu().numpy() for p in points]
+    pred_mask = pred_mask.squeeze().cpu().numpy()
+    width, height = spect.shape[:2][::-1]
+
+
+    fig, axs = plt.subplots(figsize=(width/100, height/100))
+    show_spect(spect, fig)
+    fig.savefig(f'{save_path}/spect_{idx}_raw.png')
+    plt.close()
+    fig, axs = plt.subplots(figsize=(width/100, height/100))
+    show_spect(spect, fig)
+    show_mask(masks, axs)
+    fig.savefig(f'{save_path}/spect_{idx}_gt.png')
+    plt.close()
+    fig, axs = plt.subplots(figsize=(width/100, height/100))
+    show_spect(spect, fig)
+    show_mask(pred_mask, axs)
+    fig.savefig(f'{save_path}/spect_{idx}_pred.png')
+    plt.close()
+    fig, axs = plt.subplots(figsize=(width/100, height/100))
+    show_spect(spect, fig)
+    show_points(points[0], points[1], axs, shape=(height, width))
+    fig.savefig(f'{save_path}/spect_{idx}_prompt.png')
+    plt.close()

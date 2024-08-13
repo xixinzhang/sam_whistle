@@ -5,6 +5,8 @@ data/*
 !data/.gitkeep
 imgs/*
 !imgs/.gitkeep
+logs/*
+!logs/.gitkeep
 
 __pycache__
 *.pth

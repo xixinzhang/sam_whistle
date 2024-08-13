@@ -11,40 +11,18 @@ import tyro
 import struct 
 import matplotlib.pyplot as plt
 import json
-from sam_whistle.config import Args
 from tqdm import tqdm
 
-# from datasets.tools import ResizeAndPad
+from segment_anything.utils.transforms import ResizeLongestSide
+from sam_whistle import utils, config
 
-# def load_datasets(args, img_size=1024):
-    
-#     transform = ResizeAndPad(img_size)
-#     train_dataset = WhistleDataset(args, split='train', transform=transform)
-#     test_dataset = WhistleDataset(args, split='test', transform=transform)
-#     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn_soft)
-#     test_loader = DataLoader(test_dataset, batch_size=args.val_batchsize, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
-
-#     return train_loader, test_loader
-
-# def collate_fn(batch):
-#     images, bboxes, masks = zip(*batch)
-#     images = torch.stack(images)
-#     return images, bboxes, masks
-
-# def collate_fn_soft(batch):
-#     images_soft, images, bboxes, masks = zip(*batch)
-#     images = torch.stack(images)
-#     # images_origin = np.stack(images_origin)
-#     images_soft = torch.stack(images_soft)
-#     return images_soft, images, bboxes, masks
 
 class WhistleDataset(Dataset):
-    def __init__(self, args:Args, split='train', transform=None):
+    def __init__(self, args:config.Args, split='train', img_size=None):
         self.args = args
         self.data_dir = Path(args.path)
         self.preprocess_dir = self.data_dir / 'preprocessed'       
         self.meta = self._get_dataset_meta()
-        self.transform = transform
         if args.preprocess:
             # self._wave2spect("palmyra092007FS192-071012-010614", "train", empty=True)
             # self._wave2spect("palmyra092007FS192-070924-205730", "test", empty=True)
@@ -65,6 +43,7 @@ class WhistleDataset(Dataset):
         with open(self.preprocess_dir/split /'annotation.json', 'r') as f:
             self.all_ann_dict = json.load(f)
         self.spect_ids = list(self.idx2file.keys())
+        self.transform = ResizeLongestSide(img_size)
 
     def __len__(self):
         return len(self.spect_ids)
@@ -85,24 +64,25 @@ class WhistleDataset(Dataset):
         for contour, bbox in zip(anns['contours'], anns['bboxes']):
             contours.append(contour)
             bboxes.append(bbox)
-            # # mask
-            # mask = np.zeros((height, width), dtype=np.uint8)
-            # for x, y in ma:
-            #     if x>=0 and x<width and y>=0 and y<height:
-            #         mask[y, x] = 1
-            # masks.append(mask)
-
         # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
         bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
-        # masks = np.stack(masks, axis=0) # [num_obj, height, width]
         contours = [np.array(contour) for contour in contours]
-        return spect, bboxes, contours
+        masks = self._get_gt_masks(spect.shape[:2], contours)
+        gt_mask = utils.combine_masks(masks)
+        points_prompt = utils.sample_mask_points(gt_mask, self.args.num_pos_points, self.args.num_neg_points)
+        return spect, bboxes, contours, gt_mask, points_prompt
 
-        # if self.split == 'train':
-        #     return spect, spect, torch.tensor(bboxes), torch.tensor(masks).float()
-        # else:
-        #     return spect, torch.tensor(bboxes), torch.tensor(masks).float()
-    
+    def _get_gt_masks(self, shape, contours):
+        masks = []
+        for contour in contours:
+            ma= np.zeros(shape)
+            pix_coord = contour.astype(np.int32)
+            for x, y in pix_coord:
+                x = np.maximum(0, np.minimum(x, shape[1]-1))
+                y = np.maximum(0, np.minimum(y, shape[0]-1))
+                ma[y, x] = 1
+            masks.append(ma)
+        return masks
 
 
     def _get_dataset_meta(self, train_anno_dir = 'train_puli', test_anno_dir = 'test_puli'):
@@ -298,7 +278,7 @@ class WhistleDataset(Dataset):
 
 
 if __name__ == "__main__":
-    args = tyro.cli(Args)
+    args = tyro.cli(config.Args)
     print(args)
     train_set = WhistleDataset(args, 'train')
     print("training data done")

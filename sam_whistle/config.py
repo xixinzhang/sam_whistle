@@ -19,22 +19,27 @@ class Args:
     split_ms: int = 3000
 
     num_pos_points: int=10
-    num_neg_points: int=10
+    num_neg_points: int=30
     box_pad: Optional[int] = None  # 3
     thickness: Optional[int] = 3  # 3
 
     # Model
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     model_type: str = 'vit_h'
-    sam_ckpt_path: str = '~/Desktop/projects/sam_whistle/checkpoint'
+    sam_ckpt_path: str = '/home/asher//Desktop/projects/sam_whistle/checkpoints'
     freeze_img_encoder:bool = True
     freeze_prompt_encoder:bool = True
     freeze_mask_decoder:bool = True
     ann_iters: int = 10
     fintune_decoder_type: Literal["sam", "pu"] = 'sam'
+    
     # Training
+    loss_fn: Literal["mse", "dice"] = 'dice'
+    evaluate: bool = False
+    batch_size: int = 5
     epochs: int = 100
     lr: float = 1e-4
+    save_path: str = '/home/asher/Desktop/projects/sam_whistle/logs'
     
 
 
