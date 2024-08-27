@@ -158,8 +158,9 @@ class Sam(nn.Module):
             align_corners=False,
         )
         masks = masks[..., : input_size[0], : input_size[1]]
+        low_res_masks = masks
         masks = F.interpolate(masks, original_size, mode="bilinear", align_corners=False)
-        return masks
+        return masks, low_res_masks
 
     def preprocess(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize pixel values and pad to a square input."""

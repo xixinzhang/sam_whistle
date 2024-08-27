@@ -12,6 +12,10 @@ import struct
 import matplotlib.pyplot as plt
 import json
 from tqdm import tqdm
+from skimage.morphology import skeletonize
+from scipy.interpolate import interp1d, splev, splrep
+from numpy.polynomial import Polynomial
+import cv2
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from sam_whistle import utils, config
@@ -45,6 +49,8 @@ class WhistleDataset(Dataset):
         self.spect_ids = list(self.idx2file.keys())
         self.transform = ResizeLongestSide(img_size)
 
+        self.interpolation = args.interpolation
+
     def __len__(self):
         return len(self.spect_ids)
 
@@ -67,23 +73,50 @@ class WhistleDataset(Dataset):
         # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
         bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
         contours = [np.array(contour) for contour in contours]
-        masks = self._get_gt_masks(spect.shape[:2], contours)
+        masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
         gt_mask = utils.combine_masks(masks)
-        points_prompt = utils.sample_mask_points(gt_mask, self.args.num_pos_points, self.args.num_neg_points)
-        return spect, bboxes, contours, gt_mask, points_prompt
+        if self.args.sample_points == "random":
+            points_prompt = utils.sample_points_random(masks, self.args.num_pos_points, self.args.num_neg_points)
+        elif self.args.sample_points == "box":
+            points_prompt = utils.sample_points_box(masks, self.args.num_pos_points, self.args.num_neg_points, self.args.box_pad)
+        expand_gt_mask = self._expand_mask(gt_mask)
+        return spect, bboxes, contours, expand_gt_mask, points_prompt
 
-    def _get_gt_masks(self, shape, contours):
+    def _get_gt_masks(self, shape, contours, interp=None):
         masks = []
         for contour in contours:
             ma= np.zeros(shape)
-            pix_coord = contour.astype(np.int32)
-            for x, y in pix_coord:
-                x = np.maximum(0, np.minimum(x, shape[1]-1))
-                y = np.maximum(0, np.minimum(y, shape[0]-1))
+
+            x, y = contour[:, 0], contour[:, 1]
+
+            x_min, x_max = x.min(), x.max()
+            new_x = np.linspace(x_min, x_max, len(x)*2, endpoint=True)
+
+            if interp == "linear":
+                new_y = np.interp(new_x, x, y)
+            elif interp == "polynomial":
+                poly_interp = Polynomial.fit(x, y, 3)
+                new_y = poly_interp(new_x)
+            elif interp == "spline":
+                splline_interp = splrep(x, y, k=3)
+                new_y = splev(new_x, splline_interp)
+            else:
+                raise ValueError("Interpolation method not supported")
+            
+            new_x = np.maximum(0, np.minimum(new_x, shape[1]-1)).astype(int)
+            new_y = np.maximum(0, np.minimum(new_y, shape[0]-1)).astype(int)
+  
+            for y, x in zip(new_y, new_x):
                 ma[y, x] = 1
             masks.append(ma)
         return masks
 
+    def _expand_mask(self, mask, kernel_size=3):
+        """dilate and skeletonize the mask"""
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        dilated = cv2.dilate(mask, kernel, iterations=1)
+        return dilated
+        
 
     def _get_dataset_meta(self, train_anno_dir = 'train_puli', test_anno_dir = 'test_puli'):
 

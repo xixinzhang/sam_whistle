@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import torch
 from torch import nn
 import numpy as np
@@ -59,7 +60,8 @@ class SAM_whistle(nn.Module):
             dense_prompt_embeddings=dense_embedding,
             multimask_output=False
         )
-        upscaled_masks = self.sam_model.postprocess_masks(
+
+        upscaled_masks, low_mask = self.sam_model.postprocess_masks(
             low_res_masks,
             input_size=transformed_spect.shape[-2:],
             original_size=spect.shape[-2:]
@@ -70,7 +72,7 @@ class SAM_whistle(nn.Module):
         # loss
         loss = self.loss_fn(binary_masks, gt_mask)
         
-        return loss, binary_masks
+        return loss, binary_masks, low_mask
 
 
 class DiceLoss(nn.Module):

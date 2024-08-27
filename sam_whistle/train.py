@@ -5,6 +5,7 @@ import os
 import tyro
 from tqdm import tqdm
 import numpy as np
+from datetime import datetime
 
 from sam_whistle.dataset import WhistleDataset
 from sam_whistle.model import SAM_whistle
@@ -19,9 +20,15 @@ def run(args: Args):
     # torch.cuda.manual_seed(0)
     # torch.backends.cudnn.deterministic = True
     # Load model
+
+    timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    args.save_path = os.path.join(args.save_path, str(timestamp))
+    if not os.path.exists(args.save_path):
+        os.makedirs(args.save_path)
+
     model = SAM_whistle(args)
     model.to(args.device)
-    optimizer = optim.Adam(model.sam_model.mask_decoder.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.sam_model.mask_decoder.parameters(), lr=args.lr)
     # scheduler
     # Load data
     trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
@@ -32,18 +39,21 @@ def run(args: Args):
     losses = []
     min_test_loss = torch.inf
     # Train model
-    for epoch in tqdm(range(args.epochs)):
+    pbar = tqdm(range(args.epochs))
+    for epoch in pbar:
         epoch_losses = []
         model.train()
         loss = 0
         for i, data in enumerate(trainloader):
-            l, pred_mask = model(data)
+            l, _, _ = model(data)
             loss += l/ args.batch_size
             if (i+1) % args.batch_size == 0:
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.sam_model.mask_decoder.parameters(), max_norm=1.0)
                 optimizer.step()
                 epoch_losses.append(loss.item())
+                pbar.set_description(f"batch_loss: {loss.item()}")
                 loss = 0
         losses.append(epoch_losses)
         print(f"Epoch {epoch} Loss: {np.mean(epoch_losses)}")
@@ -88,7 +98,8 @@ def evaluate(args: Args):
     for i, data in enumerate(trainloader):
         with torch.no_grad():
             spect, _, _, masks, points= data 
-            loss, pred_mask = model(data)
+            loss, pred_mask, low_mask = model(data)
+            # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
             utils.visualize(spect, masks, points, pred_mask, output_path, i)
             test_losses.append(loss.item())
         if i == 10:

@@ -20,8 +20,10 @@ class Args:
 
     num_pos_points: int=10
     num_neg_points: int=30
-    box_pad: Optional[int] = None  # 3
+    box_pad: Optional[int] = 5  # 3
     thickness: Optional[int] = 3  # 3
+    sample_points: Literal["random", "box"] = 'box'
+    interpolation: Literal["linear", "polynomial", "spline"] = 'linear'
 
     # Model
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -36,9 +38,9 @@ class Args:
     # Training
     loss_fn: Literal["mse", "dice"] = 'dice'
     evaluate: bool = False
-    batch_size: int = 5
-    epochs: int = 100
-    lr: float = 1e-4
+    batch_size: int = 48
+    epochs: int = 20
+    lr: float = 1e-6
     save_path: str = '/home/asher/Desktop/projects/sam_whistle/logs'
     
 

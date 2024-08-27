@@ -1,41 +1,55 @@
 import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
 
-def get_point_prompts(data, n_pos, n_neg= None, box_pad = None, thickness = None):
+def sample_points_box(masks, n_pos=5, n_neg= 10, box_pad = None, thickness = None):
     """sample point prompt from mask.
     Args:
+        masks:
         data: [contours: (n, 2)] (x, y), [bbox: (4,)] [x, y]
     Returns:
         prompts: (n, (points, labels))
     """
     assert n_pos or n_neg, 'n_pos or n_neg must be provided'
-    spect, bboxes, contours,_, _ = data
-    height, width, _ = spect.shape
+    # spect, bboxes, contours,_, _ = data
+    height, width = masks[0].shape
     if n_neg is None:
         n_neg = n_pos
     
-    prompts = []
-    for contour, bbox in zip(contours, bboxes):
+    combined_mask = combine_masks(masks)
+    all_pos_ids = np.argwhere(combined_mask == 1) # (y, x)
+    all_mask_points = []
+    all_mask_labels = []
+    # for contour, bbox in zip(contours, bboxes):
+    for mask in masks:
+        assert mask.ndim == 2, 'mask must be 2D'
+        pos_indices = np.argwhere(mask == 1) # (y, x)
+
+        contour = np.flip(pos_indices, axis=1) # (x, y)
         # sample positive points
         n_contour = len(contour)
-        stratum_size = n_contour//n_pos
-        pos_pts = []
-        for i in range(n_pos):
-            start_idx = i * stratum_size
-            if i == n_pos - 1:
-                end_idx = n_contour
-            else:
-                end_idx = (i + 1) * stratum_size
-            
-            # Sample one element from the stratum
-            stratum = contour[start_idx:end_idx]
-            sampled_point = stratum[np.random.randint(0, len(stratum))]
-            pos_pts.append(sampled_point)
+        if n_contour > n_pos:
+            stratum_size = n_contour//n_pos
+            pos_pts = []
+            for i in range(n_pos):
+                start_idx = i * stratum_size
+                if i == n_pos - 1:
+                    end_idx = n_contour
+                else:
+                    end_idx = (i + 1) * stratum_size
+                
+                # print(stratum_size, start_idx, end_idx)
+                # Sample one element from the stratum
+                stratum = contour[start_idx:end_idx]
+                sampled_point = stratum[np.random.randint(0, len(stratum))]
+                pos_pts.append(sampled_point)
+        else:
+            pos_pts = contour
 
         # sample negative points
         # expanded_bbox
         if box_pad:
-            x_min, y_min, x_max, y_max = bbox
+            x_min, y_min, x_max, y_max = contour[:, 0].min(), contour[:, 1].min(), contour[:, 0].max(), contour[:, 1].max()
             x_min = x_min - box_pad if x_min - box_pad >0  else 0
             y_min = y_min - box_pad if y_min - box_pad >0  else 0
             x_max = x_max + box_pad if x_max + box_pad < width else width
@@ -99,27 +113,56 @@ def get_point_prompts(data, n_pos, n_neg= None, box_pad = None, thickness = None
                 y2 = y + thickness if 0 < y + thickness< height  else height
                 neg_pts.append((x, y1))
                 neg_pts.append((x, y2))
-                
+
+        neg_pts = np.array(neg_pts)
+        for p in neg_pts:
+            if p in np.flip(all_pos_ids, axis=1):
+                neg_pts = np.delete(neg_pts, np.argwhere(np.all(neg_pts == p, axis=1)), axis=0)
 
         points = np.concatenate((pos_pts, neg_pts), axis=0)
         labels = np.concatenate((np.ones(len(pos_pts)), np.zeros(len(neg_pts))), axis=0)
-        prompts.append((points, labels))
-    return prompts
+        all_mask_points.append(points)
+        all_mask_labels.append(labels)
+    
+    all_mask_points = np.concatenate(all_mask_points, axis=0)
+    all_mask_labels = np.concatenate(all_mask_labels, axis=0)
+    return all_mask_points, all_mask_labels
 
-def sample_mask_points(mask, n_pos=None, n_neg= None):
+def sample_points_random(masks, n_pos=5, n_neg= 5):
     """
     
-        Args: mask: HW 
+        Args: 
+            masks: [HW] 
     """
-    pos_indices = np.argwhere(mask == 1)
-    neg_indices = np.argwhere(mask == 0)
-    pos_replace = True if n_pos > len(pos_indices) else False
-    pos_sample_ids = np.random.choice(len(pos_indices), n_pos, replace=pos_replace)
-    neg_sample_ids = np.random.choice(len(neg_indices), n_neg, replace=False)
-    points = np.concatenate((pos_indices[pos_sample_ids], neg_indices[neg_sample_ids]), axis=0)
-    points = np.flip(points, axis=1).copy() # (x, y)
-    labeles = np.concatenate((np.ones(n_pos), np.zeros(n_neg)), axis=0)
-    return points, labeles
+    all_mask_points = []
+    all_mask_labels = []
+    combined_mask = combine_masks(masks)
+    all_pos_ids = np.argwhere(combined_mask == 1)
+
+    for mask in masks:
+        assert mask.ndim == 2, 'mask must be 2D'
+        pos_indices = np.argwhere(mask == 1)
+        neg_indices = np.argwhere(mask == 0)
+        pos_replace = True if n_pos > len(pos_indices) else False
+        pos_sample_ids = np.random.choice(len(pos_indices), n_pos, replace=pos_replace)
+        neg_sample_ids = []
+        for j in range(len(n_neg)):
+            while True:
+                neg_id = np.random.choice(len(neg_indices))
+                if neg_id not in all_pos_ids:
+                    neg_sample_ids.append(neg_id)
+                    break
+        neg_sample_ids = np.array(neg_sample_ids)
+        
+        points = np.concatenate((pos_indices[pos_sample_ids], neg_indices[neg_sample_ids]), axis=0)
+        points = np.flip(points, axis=1).copy() # (x, y) sam format
+        labels = np.concatenate((np.ones(n_pos), np.zeros(n_neg)), axis=0)
+        all_mask_points.append(points)
+        all_mask_labels.append(labels)
+
+    all_mask_points = np.concatenate(all_mask_points, axis=0)
+    all_mask_labels = np.concatenate(all_mask_labels, axis=0)
+    return all_mask_points, all_mask_labels
 
 def combine_masks(masks:list):
     mask = np.zeros_like(masks[0])
@@ -190,3 +233,82 @@ def visualize(spect, masks, points, pred_mask, save_path=None, idx=None):
     show_points(points[0], points[1], axs, shape=(height, width))
     fig.savefig(f'{save_path}/spect_{idx}_prompt.png')
     plt.close()
+
+def visualize_array(array, save_path=None, idx=None, name=None):
+    width, height = array.shape[-2:][::-1]
+    fig, axs = plt.subplots(figsize=(width/100, height/100))
+    axs.imshow(array[0, 0])
+    fig.savefig(f'{save_path}/{name}_{idx}.png')
+    plt.close()
+
+def toggle_visual(image_sets):
+    """
+    Function to visualize multiple sets of images, masks, and depth images 
+    with keyboard toggles.
+    
+    Parameters:
+    image_sets (list of dicts): A list of dictionaries where each dictionary contains
+                                'image', 'mask', and 'depth' keys corresponding to each set.
+    """
+    # Initialize the current index for the image set and the current display type
+    current_set_idx = 0
+    current_display_type = 'Prediction'
+
+    fig, ax = plt.subplots()
+    plt.subplots_adjust(bottom=0.2)  # Adjust the plot to fit the text
+
+    # Function to update the display based on the current index and display type
+    def update_display():
+        ax.clear()
+        data = image_sets[current_set_idx][current_display_type]
+        im_display = ax.imshow(data, cmap='gray' if data.ndim == 2 else None)
+        ax.set_title(f'Set {current_set_idx + 1} - {current_display_type.capitalize()}')
+        plt.axis('off')
+        plt.figtext(0.5, 0.05, 
+                    "Press 1: Prediction | Press 2: Mask | Press 3: Prompt | Press 4: Spectrogram\n Left/Right Arrows: Change Set", 
+                    ha="center", fontsize=12)
+        fig.canvas.draw_idle()
+
+    # Handle key press events
+    def toggle_display(event):
+        nonlocal current_display_type, current_set_idx
+
+        if event.key == '1':
+            current_display_type = 'Prediction'
+        elif event.key == '2':
+            current_display_type = 'Mask'
+        elif event.key == '3':
+            current_display_type = 'Prompt'
+        elif event.key == '4':
+            current_display_type = 'Spectrogram'
+        elif event.key == 'left':
+            current_set_idx = (current_set_idx - 1) % len(image_sets)
+        elif event.key == 'right':
+            current_set_idx = (current_set_idx + 1) % len(image_sets)
+
+        update_display()
+
+    fig.canvas.mpl_connect('key_press_event', toggle_display)
+
+    # Initial display
+    update_display()
+
+    plt.show()
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output_dir', type=str, default='logs/08-25-2024_21-45-41/predictions')
+    args = parser.parse_args()
+    output_dir = Path(args.output_dir)
+    image_sets = []
+    for idx in range(10):  # Assuming there are 10 sets of images
+        image_set = {}
+        image_set['Spectrogram'] = plt.imread(output_dir / f"spect_{idx}_raw.png")
+        image_set['Mask'] = plt.imread(output_dir / f"spect_{idx}_gt.png")
+        image_set['Prediction'] = plt.imread(output_dir / f"spect_{idx}_pred.png")
+        image_set['Prompt'] = plt.imread(output_dir / f"spect_{idx}_prompt.png")
+        image_sets.append(image_set)
+
+    toggle_visual(image_sets)
+
