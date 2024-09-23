@@ -34,15 +34,19 @@ class Args:
     freeze_mask_decoder:bool = True
     ann_iters: int = 10
     fintune_decoder_type: Literal["sam", "pu"] = 'sam'
+    sam_decoder: bool = True
     
     # Training
-    loss_fn: Literal["mse", "dice"] = 'dice'
-    evaluate: bool = False
+    loss_fn: Literal["mse", "dice", "bce_logits"] = 'dice'
     batch_size: int = 48
-    epochs: int = 20
-    lr: float = 1e-6
+    epochs: int = 100
+    decoder_lr: float = 2e-5
+    encoder_lr: float = 1e-5
     save_path: str = '/home/asher/Desktop/projects/sam_whistle/logs'
     
+    # Evaluation
+    evaluate: bool = False
+    visualize_eval: bool = False
 
 
 if __name__ == '__main__':

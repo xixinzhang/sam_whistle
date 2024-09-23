@@ -11,6 +11,17 @@ from sam_whistle import utils
 from segment_anything import sam_model_registry, SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
+
+def weights_init(m):
+    if isinstance(m, nn.Conv2d):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
 class SAM_whistle(nn.Module):
 
     def __init__(self, args: Args):
@@ -45,7 +56,7 @@ class SAM_whistle(nn.Module):
         coords = self.transform.apply_coords_torch(coords, spect.shape[-2:])
         coords = coords.to(self.device)
         labels = labels.to(self.device)
-
+        
         with torch.no_grad():
             spect_embedding = self.sam_model.image_encoder(input_spect)
             sparse_embedding, dense_embedding = self.sam_model.prompt_encoder(
@@ -53,6 +64,7 @@ class SAM_whistle(nn.Module):
                 boxes=None,
                 masks=None
             )
+            
         low_res_masks, iou_predictions = self.sam_model.mask_decoder(
             image_embeddings=spect_embedding,
             image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
@@ -66,13 +78,14 @@ class SAM_whistle(nn.Module):
             input_size=transformed_spect.shape[-2:],
             original_size=spect.shape[-2:]
         )
-        binary_masks = normalize(threshold(upscaled_masks, 0, 0))
-        gt_mask = gt_mask.unsqueeze(1).to(self.device)
+        # binary_masks = normalize(threshold(upscaled_masks, 0, 0))
+        gt_mask = gt_mask.to(self.device)
+        upscaled_masks = torch.sigmoid(upscaled_masks)
         
         # loss
-        loss = self.loss_fn(binary_masks, gt_mask)
+        loss = self.loss_fn(upscaled_masks, gt_mask)
         
-        return loss, binary_masks, low_mask
+        return loss, upscaled_masks, low_mask
 
 
 class DiceLoss(nn.Module):

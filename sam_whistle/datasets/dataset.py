@@ -271,7 +271,7 @@ class WhistleDataset(Dataset):
             shutil.rmtree(split_dir)
         spec_dir.mkdir(parents= True,exist_ok=True)
         split_dir.mkdir(parents= True,exist_ok=True)
-        self._save_spect(spec_db_li, ann_span_ids, split_dir, normalized=True, )
+        self._save_spect(spec_db_li, ann_span_ids, split_dir,  gt=True, normalized=True, ann_dict=ann_dict)
         self._save_spect(spec_db_li, all_span_ids, spec_dir, gt=True, ann_dict=ann_dict, )
         
         # save annotation
@@ -313,11 +313,12 @@ class WhistleDataset(Dataset):
 if __name__ == "__main__":
     args = tyro.cli(config.Args)
     print(args)
-    train_set = WhistleDataset(args, 'train')
+    # train_set = WhistleDataset(args, 'train')
     print("training data done")
-    # test_set = WhistleDataset(args, 'test')
+    test_set = WhistleDataset(args, 'test')
     # print("testing data done")
     # print(len(train_set), len(test_set)) 
-    data = train_set[0]
-    print(data[0].shape, data[1].shape, len(data[2]))
+    # data = train_set[0]
+    # print(data[0].shape, data[1].shape, len(data[2]))
+
 
