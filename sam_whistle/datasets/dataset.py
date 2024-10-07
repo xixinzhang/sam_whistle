@@ -16,17 +16,23 @@ from skimage.morphology import skeletonize
 from scipy.interpolate import interp1d, splev, splrep
 from numpy.polynomial import Polynomial
 import cv2
+import lmdb
+import pickle
+import random
+import os 
 
 from segment_anything.utils.transforms import ResizeLongestSide
-from sam_whistle import utils, config
+from sam_whistle import utils, config, visualization
 
 
 class WhistleDataset(Dataset):
-    def __init__(self, args:config.Args, split='train', img_size=None):
+    def __init__(self, args:config.Args, split='train', img_size=1024):
         self.args = args
         self.data_dir = Path(args.path)
         self.preprocess_dir = self.data_dir / 'preprocessed'       
         self.meta = self._get_dataset_meta()
+        self.split = split
+        self.transform = ResizeLongestSide(img_size)
         if args.preprocess:
             # self._wave2spect("palmyra092007FS192-071012-010614", "train", empty=True)
             # self._wave2spect("palmyra092007FS192-070924-205730", "test", empty=True)
@@ -35,8 +41,12 @@ class WhistleDataset(Dataset):
             for stem in self.meta['train']:
                 if not (self.preprocess_dir / f'train/{stem}').exists():
                     raise FileNotFoundError(f'{stem} not found in train')
-        
-        self.split = split
+        if args.crop:
+            self.freq_resolution = 1000 // args.frame_ms
+            self.time_resolution = args.hop_ms
+            self.crop_bottom = args.min_freq // self.freq_resolution
+            self.crop_top = args.max_freq // self.freq_resolution
+
         if split == 'train':
             train_files = list((self.preprocess_dir / 'train').glob('*/*.npz'))
             self.idx2file = {i: f for i, f in enumerate(train_files)}
@@ -46,9 +56,8 @@ class WhistleDataset(Dataset):
         
         with open(self.preprocess_dir/split /'annotation.json', 'r') as f:
             self.all_ann_dict = json.load(f)
-        self.spect_ids = list(self.idx2file.keys())
-        self.transform = ResizeLongestSide(img_size)
 
+        self.spect_ids = list(self.idx2file.keys())
         self.interpolation = args.interpolation
 
     def __len__(self):
@@ -75,12 +84,26 @@ class WhistleDataset(Dataset):
         contours = [np.array(contour) for contour in contours]
         masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
         gt_mask = utils.combine_masks(masks)
-        if self.args.sample_points == "random":
-            points_prompt = utils.sample_points_random(masks, self.args.num_pos_points, self.args.num_neg_points)
-        elif self.args.sample_points == "box":
-            points_prompt = utils.sample_points_box(masks, self.args.num_pos_points, self.args.num_neg_points, self.args.box_pad)
         expand_gt_mask = self._expand_mask(gt_mask)
-        return spect, bboxes, contours, expand_gt_mask, points_prompt
+
+        if self.args.crop:
+            spect = spect[-self.crop_top: -self.crop_bottom+1]
+            expand_gt_mask = expand_gt_mask[-self.crop_top: -self.crop_bottom+1]
+
+        spect= spect.transpose(-1, 0, 1) # [C, H, W]
+        expand_gt_mask = expand_gt_mask[np.newaxis, :, :]
+
+        if self.args.use_prompt:
+            if self.args.sample_points is None:
+                points_prompt = None
+            elif self.args.sample_points == "random":
+                points_prompt = utils.sample_points_random(masks, self.args.num_pos_points, self.args.num_neg_points)
+            elif self.args.sample_points == "box":
+                points_prompt = utils.sample_points_box(masks, self.args.num_pos_points, self.args.num_neg_points, self.args.box_pad)
+
+            return spect, expand_gt_mask, points_prompt
+        else:
+            return spect, expand_gt_mask
 
     def _get_gt_masks(self, shape, contours, interp=None):
         masks = []
@@ -112,7 +135,7 @@ class WhistleDataset(Dataset):
         return masks
 
     def _expand_mask(self, mask, kernel_size=3):
-        """dilate and skeletonize the mask"""
+        """dilate the mask"""
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         dilated = cv2.dilate(mask, kernel, iterations=1)
         return dilated
@@ -310,15 +333,250 @@ class WhistleDataset(Dataset):
                 plt.close(fig)
 
 
+
+class WhistlePatch(WhistleDataset):
+    def __init__(self, args:config.Args, split='train', img_size=None):
+        super().__init__(args, split, img_size)
+        self.patch_size = args.patch_size
+        if split == 'train':
+            self.stride = args.patch_stride
+        else:
+            self.stride = self.patch_size
+            
+        self.lmdb_path = self.preprocess_dir / f'patch_{split}.lmdb'
+        self.balanced_lmdb_path = self.preprocess_dir / f'balanced_patch_{split}.lmdb'
+        self.lmdb_path = str(self.lmdb_path)
+        self.balanced_lmdb_path = str(self.balanced_lmdb_path)
+        if args.patch_cached:
+            if not os.path.exists(self.lmdb_path):
+                raise FileNotFoundError(f'Patch cache file: {self.lmdb_path} not found')
+            if os.path.exists(self.balanced_lmdb_path) and not args.balanced_cached:
+                shutil.rmtree(self.balanced_lmdb_path)
+        else:
+            if os.path.exists(self.lmdb_path):
+                shutil.rmtree(self.lmdb_path)
+            spect_list = []
+            mask_list = []
+            for idx in tqdm(range(len(self.spect_ids))):
+                spect_path = self.idx2file[idx]
+                # print(spect_path)
+                file_id = spect_path.parent.name
+                spect_split_id = int(spect_path.stem)
+                spect = np.load(spect_path)['arr_0']
+                spect = np.stack([spect, spect, spect], axis=-1)
+                ann_dict = self.all_ann_dict[file_id]
+                anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
+                bboxes = []
+                # masks = []
+                contours = []
+                # height, width, _ = spect.shape
+                for contour, bbox in zip(anns['contours'], anns['bboxes']):
+                    contours.append(contour)
+                    bboxes.append(bbox)
+                # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
+                bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
+                contours = [np.array(contour) for contour in contours]
+                masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
+                gt_mask = utils.combine_masks(masks)
+                expand_gt_mask = self._expand_mask(gt_mask)
+
+                if args.crop:
+                    spect = spect[-self.crop_top: -self.crop_bottom+1]
+                    expand_gt_mask = expand_gt_mask[-self.crop_top: -self.crop_bottom+1]
+
+                # spect= spect.transpose(-1, 0, 1) # [C, H, W]
+                # expand_gt_mask = expand_gt_mask[np.newaxis, :, :]
+
+                spect_list.append(spect)
+                mask_list.append(expand_gt_mask)
+            
+            self._store_patches_in_lmdb(spect_list, mask_list, self.patch_size, self.stride)
+        
+
+
+        self.env = lmdb.open(self.lmdb_path, readonly=True, lock=False)
+        print(f'Original lmdb for {split} has {self.env.stat()['entries']} entries')  
+    
+        if self.split == 'train':
+            if not self.args.balanced_cached:
+                print('Balancing positive and negative patches...')
+                self._get_balanced_lmdb()
+            self.balanced_env = lmdb.open(self.balanced_lmdb_path, readonly=True, lock=False)
+            print(f'Balenced lmdb  for {split} has {self.balanced_env.stat()['entries']} entries')
+
+    def _extract_patches(self, image, mask, patch_size=50, stride=25):
+        """
+        Extracts patches from an image and corresponding mask.
+
+        Args:
+            image (np.ndarray): The image (H, W, C) for multi-channel.
+            mask (np.ndarray): The corresponding mask (H, W).
+            patch_size (int): The size of each patch.
+            stride (int): The stride for overlapping patches.
+
+        Returns:
+            image_patches (list): List of image patches.
+            mask_patches (list): List of corresponding mask patches.
+            metadata (list): Metadata with (img_idx, i, j) where (i, j) is the top-left corner.
+        """
+        h, w = image.shape[:2]
+        image_patches = []
+        mask_patches = []
+        metadata = []
+        
+        for i in range(0, h - patch_size + 1, stride):
+            for j in range(0, w - patch_size + 1, stride):
+                image_patch = image[i:i+patch_size, j:j+patch_size, :]
+                mask_patch = mask[i:i+patch_size, j:j+patch_size]
+                image_patches.append(image_patch)
+                mask_patches.append(mask_patch)
+                metadata.append((i, j))  # Record the top-left corner of the patch
+        return image_patches, mask_patches, metadata
+
+    def _store_patches_in_lmdb(self, image_list, mask_list, patch_size=50, stride=25):
+        """
+        Partition images and masks into patches, then store them in LMDB with metadata.
+        mark the patch is positive or negative (foreground or background).
+
+        Args:
+            image_list (list of np.ndarray): List of images.
+            mask_list (list of np.ndarray): List of masks corresponding to images.
+            lmdb_path (str): Path to store the LMDB database.
+            patch_size (int): Size of each patch.
+            stride (int): Stride between patches.
+        """
+        # Open LMDB database
+        env = lmdb.open(self.lmdb_path, map_size=int(1e12)) 
+
+        patch_id = 0  # Unique patch identifier
+        with env.begin(write=True) as txn:
+            for img_idx, (image, mask) in enumerate(tqdm(zip(image_list, mask_list), total=len(image_list))):
+                # Extract patches from the image and mask
+                image_patches, mask_patches, metadata = self._extract_patches(image, mask, patch_size, stride)
+                
+                # Store patches with their positive/negative label
+                for img_patch, mask_patch, meta in zip(image_patches, mask_patches, metadata):
+                    # Determine if the patch is positive or negative
+                    if np.any(mask_patch > 0):  # Positive patch: contains non-zero pixels (foreground)
+                        label = 'positive'
+                    else:  # Negative patch: all pixels are zero (background)
+                        label = 'negative'
+
+                    # Store the patch data along with the label
+                    data = {
+                        'image_patch': img_patch,
+                        'mask_patch': mask_patch,
+                        'image_index': img_idx,
+                        'location': meta,
+                        'label': label  # 'positive' or 'negative'
+                    }
+                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(data))
+                    patch_id += 1  # Increment patch ID
+    
+    def _get_balanced_lmdb(self, lmdb_batch_size=1000,):
+        """
+        Create a new LMDB with balanced positive and negative patches.
+
+        Args:
+            lmdb_path (str): Path to LMDB file.
+
+        Returns:
+            positive_patches (list): List of all positive patches from LMDB.
+            negative_patches (list): List of all negative patches from LMDB.
+        """
+        positive_patches = []
+        negative_patches = []
+        
+        with self.env.begin() as txn:
+            cursor = txn.cursor()
+            for key, patch_data in tqdm(cursor, total=self.env.stat()['entries']):
+                data = pickle.loads(patch_data)
+                # Separate positive and negative patches based on label
+                if data['label'] == 'positive':
+                    positive_patches.append(data)
+                else:
+                    negative_patches.append(data)
+
+        min_size = min(len(positive_patches), len(negative_patches))
+        print(f"Positive patches: {len(positive_patches)}, Negative patches: {len(negative_patches)}")
+
+        # Randomly downsample the larger set
+        balanced_positive = random.sample(positive_patches, min_size) if len(positive_patches) > min_size else positive_patches
+        balanced_negative = random.sample(negative_patches, min_size) if len(negative_patches) > min_size else negative_patches
+
+        balanced_env = lmdb.open(self.balanced_lmdb_path, map_size=int(1e12))
+
+        patch_id = 0  # New patch ID for the balanced dataset
+        for i in tqdm(range(0, min_size, lmdb_batch_size)):
+            # Batch the writes in chunks
+            with balanced_env.begin(write=True) as txn:
+                for batch_idx in range(i, min(i + lmdb_batch_size, min_size)):
+                    # Add positive patches
+                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(balanced_positive[batch_idx]))
+                    patch_id += 1
+                    # Add negative patches
+                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(balanced_negative[batch_idx]))
+                    patch_id += 1
+                
+
+    def _retrieve_patch_from_lmdb(self, patch_id):
+        """
+        Retrieve a patch and its metadata from LMDB.
+
+        Args:
+            lmdb_path (str): Path to LMDB file.
+            patch_id (int): The unique patch ID.
+
+        Returns:
+            dict: A dictionary containing the image patch, mask patch, metadata, and label.
+        """
+        if self.split == 'train':
+            with self.balanced_env.begin() as txn:
+                patch_data = txn.get(f'patch_{patch_id}'.encode())
+                data = pickle.loads(patch_data)
+                return data
+        elif self.split == 'test':
+            with self.env.begin() as txn:
+                patch_data = txn.get(f'patch_{patch_id}'.encode())
+                data = pickle.loads(patch_data)
+                return data
+            
+    def __len__(self):
+        if self.split == 'train':
+            return self.balanced_env.stat()['entries']
+        elif self.split == 'test':
+            return self.env.stat()['entries']
+        
+    def __getitem__(self, idx):
+        data = self._retrieve_patch_from_lmdb(idx)
+        img_patch = data['image_patch'][..., [0]]
+        mask_patch = data['mask_patch']
+
+        img_patch= img_patch.transpose(-1, 0, 1) # [C, H, W]
+        mask_patch = mask_patch[np.newaxis, :, :]
+
+        if self.split == 'train':
+            return img_patch, mask_patch
+        elif self.split == 'test': 
+            meta = {"image_index": data['image_index'], "location": data['location']}
+            return img_patch, mask_patch, meta
+
+
 if __name__ == "__main__":
     args = tyro.cli(config.Args)
     print(args)
+    # WhistleDataset
     # train_set = WhistleDataset(args, 'train')
-    print("training data done")
-    test_set = WhistleDataset(args, 'test')
+    # test_set = WhistleDataset(args, 'test')
     # print("testing data done")
     # print(len(train_set), len(test_set)) 
     # data = train_set[0]
-    # print(data[0].shape, data[1].shape, len(data[2]))
+    # print(data[0].shape, data[1].shape, )
 
-
+    # WhistlePatch
+    train_set = WhistlePatch(args, 'train')
+    # test_set = WhistlePatch(args, 'test')
+    img, mask = train_set[0]
+    print(img.shape, mask.shape)
+    # visualization.visualize_array(img, mask=mask, random_colors=False, filename='patch')
+    # visualization.visualize_array(img, random_colors=False, filename='patch2')

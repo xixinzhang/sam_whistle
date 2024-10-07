@@ -1,3 +1,4 @@
+import pickle
 import torch
 import os
 from torch.utils.data import DataLoader
@@ -7,27 +8,33 @@ from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from sam_whistle.model.model import SAM_whistle
-from sam_whistle.datasets.dataset import WhistleDataset
+from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2
+from sam_whistle.model.loss import Charbonnier_loss
+from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch
 from sam_whistle.config import Args
 from sam_whistle import utils
 from sam_whistle.visualization import visualize
 
 @torch.no_grad()
-def evaluate(args: Args):
+def evaluate_sam(args: Args):
     print("------------Evaluating model------------")
     model = SAM_whistle(args,)
     model.to(args.device)
-    model.decoder.load_state_dict(torch.load(os.path.join(args.save_path, 'decoder.pth')))
+    if not args.freeze_img_encoder:
+        model.img_encoder.load_state_dict(torch.load(os.path.join(args.save_path, 'img_encoder.pth')))
+    if not args.freeze_mask_decoder:
+        model.decoder.load_state_dict(torch.load(os.path.join(args.save_path, 'decoder.pth')))
+    if not args.freeze_prompt_encoder:
+        model.sam_model.prompt_encoder.load_state_dict(torch.load(os.path.join(args.save_path, 'prompt_encoder.pth')))
     output_path = os.path.join(args.save_path, 'predictions')
     if not os.path.exists(output_path) and args.visualize_eval:
         os.makedirs(output_path)
     
-    trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
-    trainloader = DataLoader(trainset, batch_size=1, shuffle=False, num_workers=os.cpu_count(), drop_last=True)
+    # trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
+    # trainloader = DataLoader(trainset, batch_size=1, shuffle=False, num_workers=os.cpu_count(), drop_last=True)
     testset = WhistleDataset(args, 'test',model.sam_model.image_encoder.img_size)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=os.cpu_count(),)
-    print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
+    print(f"Test set size: {len(testset)}")
 
     model.eval()
     test_losses = []
@@ -35,41 +42,170 @@ def evaluate(args: Args):
     pred_masks = []
     for i, data in enumerate(tqdm(testloader)):
         with torch.no_grad():
-            spect, _, _, gt_mask, points= data 
-            loss, pred_mask, low_mask = model(data)
+            spect, gt_mask= data 
+            loss, pred_mask, low_mask, _ = model(data)
             gt_masks.append(gt_mask)
             pred_masks.append(pred_mask)
             if args.visualize_eval:
                 # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
-                visualize(spect, gt_mask, points, pred_mask, output_path, i)
+                spect = spect.permute(0, 2, 3, 1)
+                visualize(spect, gt_mask, pred_mask, output_path, i)
             test_losses.append(loss.item())
 
     test_loss = np.mean(test_losses)
     print(f"Test Loss: {test_loss}")
     gt_masks = torch.cat(gt_masks, dim=0).flatten().cpu().numpy()
     pred_masks = torch.cat(pred_masks, dim=0).flatten().cpu().numpy()
-    precision, recall, threshold = precision_recall_curve(gt_masks, pred_masks)
+    precision, recall, thresholds = precision_recall_curve(gt_masks, pred_masks)
+
+    return precision, recall, thresholds
+
+
+@torch.no_grad()
+def evaluate_pu(args: Args):
+    print("------------Evaluating model------------")
+    model = Detection_ResNet_BN2(args.pu_width)
+    model.to(args.device)
+    model.load_state_dict(torch.load(os.path.join(args.save_path, 'model_pu.pth')))
+    output_path = os.path.join(args.save_path, 'predictions')
+    if not os.path.exists(output_path) and args.visualize_eval:
+        os.makedirs(output_path)
     
-    return precision, recall, threshold
+    # trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
+    # trainloader = DataLoader(trainset, batch_size=1, shuffle=False, num_workers=os.cpu_count(), drop_last=True)
+    testset = WhistlePatch(args, 'test',)
+    testloader = DataLoader(testset, batch_size=args.pu_batch_size, shuffle=False, num_workers=args.num_workers,)
+    print(f"Test set size: {len(testset)}")
+    
+    loss_fn  = Charbonnier_loss()
+    
+    model.eval()
+    test_losses = []
+    gt_masks = []
+    pred_masks = []
+    for i, data in enumerate(tqdm(testloader)):
+        with torch.no_grad():
+            img, gt_mask, meta = data
+            img = img.to(args.device)
+            gt_mask = gt_mask.to(args.device)
+            pred_mask = model(img)
+            test_loss = loss_fn(pred_mask, gt_mask)
+            gt_masks.append(gt_mask)
+            pred_masks.append(pred_mask)
+
+            if args.visualize_eval:
+                # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
+                visualize(img, gt_mask, pred_mask, output_path, i)
+            test_losses.append(test_loss.item())
+
+    test_loss = np.mean(test_losses)
+    print(f"Test Loss: {test_loss}")
+    gt_masks = torch.cat(gt_masks, dim=0).flatten().cpu().numpy()
+    pred_masks = torch.cat(pred_masks, dim=0).flatten().cpu().numpy()
+    precision, recall, thresholds = precision_recall_curve(gt_masks, pred_masks)
+
+    return precision, recall, thresholds
 
 
-def plot_precision_recall(precision, recall, threshold, save_path=None):
+def filter_precision_recall(precision, recall, thresholds, model_name, min_threshold=0, max_threshold=1, save_path=None):
+    precision = precision[:-1]
+    recall = recall[:-1]
+
+    # filter
+    valid_indices = (precision > 0) & (recall > 0)
+    precision_filtered = precision[valid_indices]
+    recall_filtered = recall[valid_indices]
+    thresholds_filtered = thresholds[valid_indices]
+    f1_filtered =  2 * (precision_filtered * recall_filtered) / (precision_filtered + recall_filtered)
+    
+
+    range_indices = (thresholds >= min_threshold) & (thresholds <= max_threshold)
+
+    # Further filtering based on the limits for precision and recall
+    precision_range = precision_filtered[range_indices]
+    recall_range = recall_filtered[range_indices]
+    f1_range = f1_filtered[range_indices]
+    thresholds_range = thresholds_filtered[range_indices]
+    print(f"Best F1 score: {np.max(f1_range)}")
+    if save_path is not None:
+        # Save precision_range, recall_range, thresholds_range, f1_range in a file
+        if save_path is not None:
+            data = {
+                'model': model_name,
+                'precision_range': precision_range,
+                'recall_range': recall_range,
+                'thresholds_range': thresholds_range,
+                'f1_range': f1_range
+            }
+            file_path = os.path.join(save_path, 'evaluation_results.pkl')
+            with open(file_path, 'wb') as f:
+                pickle.dump(data, f)
+
+    return precision_range, recall_range, thresholds_range, f1_range
+
+
+def plot_precision_recall(precision, recall, thresholds, f1_score, model_names, save_path=None):
     plt.figure(figsize=(8, 6))
-    plt.plot(recall, precision,  )
+    # Optional: Plot F1 score iso-contours
+    precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), np.linspace(0.01, 1, 100))
+    f1_grid = 2 * (precision_grid * recall_grid) / (precision_grid + recall_grid)
+    fi_contour = plt.contour(recall_grid, precision_grid, f1_grid, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
+    
+    for r, p, f, model in zip(recall, precision, f1_score, model_names):
+        plt.plot(r, p)
+        best_idx = np.argmax(f)
+        plt.scatter(r[best_idx], p[best_idx], label=f'Best F1: {model}', zorder=5)
+    
+    plt.clabel(fi_contour, fmt='%.2f', inline=True, fontsize=10)
     plt.xlabel('Recall')
     plt.ylabel('Precision')
     plt.title('Precision-Recall Curve')
     plt.grid(True)
-
-    # Optional: Plot F1 score iso-contours
-    precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), np.linspace(0.01, 1, 100))
-    f1_score = 2 * (precision_grid * recall_grid) / (precision_grid + recall_grid)
-    contour = plt.contour(recall_grid, precision_grid, f1_score, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
-    plt.clabel(contour, fmt='%.2f', inline=True, fontsize=10)
+    plt.legend()
+    plt.xticks(np.arange(0, 1.1, 0.1))
+    plt.yticks(np.arange(0, 1.1, 0.1))
     plt.savefig(os.path.join(save_path, 'precision_recall_curve.png'))
+
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
     args.evaluate = True
-    precision, recall, threshold = evaluate(args)
-    plot_precision_recall(precision, recall, threshold, save_path=args.save_path)
+    if args.single_eval:
+        if args.model == 'sam':
+            precision, recall, thresholds= evaluate_sam(args)
+            precision_range, recall_range, thresholds_range, f1_range= filter_precision_recall(precision, recall, thresholds, 'sam', save_path=args.save_path)
+            model_names = ['SAM']
+        else:
+            precision, recall, thresholds= evaluate_pu(args)
+            precision_range, recall_range, thresholds_range, f1_range= filter_precision_recall(precision, recall, thresholds, 'pu', save_path=args.save_path)
+            model_names = ['PU']
+        
+        if not isinstance(precision_range, list):
+            precision_range = [precision_range]
+            recall_range = [recall_range]
+            thresholds_range = [thresholds_range]
+            f1_range = [f1_range]
+        plot_precision_recall(precision_range, recall_range, thresholds_range, f1_range, model_names, save_path=args.save_path)
+    else:
+        evaluations =[
+            "/home/asher/Desktop/projects/sam_whistle/logs/10-06-2024_15-20-41",
+            "/home/asher/Desktop/projects/sam_whistle/logs/10-06-2024_14-10-33"
+
+        ]
+        precision_range = []
+        recall_range = []
+        thresholds_range = []
+        f1_range = []
+        model_names = []
+
+        for eval in evaluations:
+            eval_file = os.path.join(eval, 'evaluation_results.pkl')
+            with open(eval_file, 'rb') as f:
+                data = pickle.load(f)
+                precision_range.append(data['precision_range'])
+                recall_range.append(data['recall_range'])
+                thresholds_range.append(data['thresholds_range'])
+                f1_range.append(data['f1_range'])
+                model_names.append(data['model'])
+
+        plot_precision_recall(precision_range, recall_range, thresholds_range, f1_range, model_names, save_path="outputs")

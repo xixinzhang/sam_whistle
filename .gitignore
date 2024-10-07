@@ -7,6 +7,7 @@ imgs/*
 !imgs/.gitkeep
 logs/*
 !logs/.gitkeep
+outputs/
 
 __pycache__
 *.pth
