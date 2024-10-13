@@ -88,11 +88,11 @@ class SAM_whistle(nn.Module):
     def forward(self, data):
         if self.args.use_prompt:
             spect, gt_mask, points= data  # BhWC, BHW, (BN2,BN)
+
             coords, labels = points
             coords = self.transform.apply_coords_torch(coords, spect.shape[-2:])
             coords = coords.to(self.device)
             labels = labels.to(self.device)
-
             sparse_embedding, dense_embedding = self.sam_model.prompt_encoder(
                 points=(coords, labels),
                 boxes=None,
@@ -103,7 +103,7 @@ class SAM_whistle(nn.Module):
 
         spect = spect.to(self.device)
         transformed_spect = self.transform.apply_image_torch(spect)
-        input_spect = self.sam_model.preprocess(transformed_spect*255)
+        input_spect = self.sam_model.preprocess(transformed_spect*255)  # [0, 1]
         
         spect_embedding = self.sam_model.image_encoder(input_spect)  # (B, 256, 64, 64)
 

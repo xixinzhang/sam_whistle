@@ -28,6 +28,8 @@ class Args:
     balanced_cached: bool = True
     patch_size: int = 50
     patch_stride: int = 25
+    slide_mean: bool = False
+
     # promt
     use_prompt:bool = False
     num_pos_points: int=10
@@ -41,7 +43,7 @@ class Args:
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Model
-    model: Literal["sam", "pu"] = 'sam'
+    model: Literal["sam", "pu", "fcn_spect", "fcn_encoder"] = 'sam'
     model_type: str = 'vit_b'
     sam_ckpt_path: str = '/home/asher//Desktop/projects/sam_whistle/checkpoints'
     freeze_img_encoder:bool = False
@@ -52,7 +54,7 @@ class Args:
 
     # SAM Training
     loss_fn: Literal["mse", "dice", "bce_logits"] = 'dice'
-    batch_size: int = 2
+    spect_batch_size: int = 2
     epochs: int = 50
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5
@@ -68,6 +70,16 @@ class Args:
     pu_scheduler_stepsize: int = 250000
     pu_iters: int = 600000
     pu_epochs: int = 400
+    pu_model_path: str = '/home/asher/Desktop/projects/sam_whistle/logs/10-06-2024_15-20-41_pu/model_pu.pth'
+
+    # FCN spect
+    fcn_spect_batch = 2048
+    random_patch_order: bool = False
+
+    # FCN Encoder
+    fcn_encoder_lr: float = 5e-5
+    fcn_decoder_lr: float = 3e-3
+
 
 
     # Evaluation

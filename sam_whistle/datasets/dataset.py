@@ -26,12 +26,13 @@ from sam_whistle import utils, config, visualization
 
 
 class WhistleDataset(Dataset):
-    def __init__(self, args:config.Args, split='train', img_size=1024):
+    def __init__(self, args:config.Args, split='train', img_size=1024, spect_nchan=3):
         self.args = args
         self.data_dir = Path(args.path)
         self.preprocess_dir = self.data_dir / 'preprocessed'       
         self.meta = self._get_dataset_meta()
         self.split = split
+        self.spect_nchan = spect_nchan
         self.transform = ResizeLongestSide(img_size)
         if args.preprocess:
             # self._wave2spect("palmyra092007FS192-071012-010614", "train", empty=True)
@@ -69,7 +70,10 @@ class WhistleDataset(Dataset):
         file_id = spect_path.parent.name
         spect_split_id = int(spect_path.stem)
         spect = np.load(spect_path)['arr_0']
-        spect = np.stack([spect, spect, spect], axis=-1)
+        if self.spect_nchan == 3:
+            spect = np.stack([spect, spect, spect], axis=-1) # [H, W, C]
+        elif self.spect_nchan == 1:
+            spect = spect[:, :, np.newaxis]
         ann_dict = self.all_ann_dict[file_id]
         anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
         bboxes = []
@@ -342,7 +346,7 @@ class WhistlePatch(WhistleDataset):
             self.stride = args.patch_stride
         else:
             self.stride = self.patch_size
-            
+
         self.lmdb_path = self.preprocess_dir / f'patch_{split}.lmdb'
         self.balanced_lmdb_path = self.preprocess_dir / f'balanced_patch_{split}.lmdb'
         self.lmdb_path = str(self.lmdb_path)
