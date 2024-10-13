@@ -75,11 +75,12 @@ class Args:
     # FCN spect
     fcn_spect_batch = 2048
     random_patch_order: bool = False
+    fcn_spect_epochs: int = 100
 
     # FCN Encoder
-    fcn_encoder_lr: float = 5e-5
-    fcn_decoder_lr: float = 3e-3
-
+    fcn_encoder_lr: float = 1e-4
+    fcn_decoder_lr: float = 1e-3
+    fcn_encoder_epochs: int = 100
 
 
     # Evaluation

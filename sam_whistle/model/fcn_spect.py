@@ -22,6 +22,11 @@ class FCN_Spect(nn.Module):
         stride = self.args.patch_stride if self.training else patch_size
         i_starts = torch.arange(0, h - patch_size + 1, stride) 
         j_starts = torch.arange(0, w - patch_size + 1, stride)
+        if (h - patch_size) % stride != 0:
+            i_starts = torch.cat([i_starts, torch.tensor([h - patch_size])])
+
+        if (w - patch_size) % stride != 0:
+            j_starts = torch.cat([j_starts, torch.tensor([w - patch_size])])
         i_grid, j_grid = torch.meshgrid(i_starts, j_starts, indexing='ij')
         self.patch_starts = torch.stack([i_grid.flatten(), j_grid.flatten()], dim=-1)
         self.patch_num = len(self.patch_starts)
@@ -61,7 +66,7 @@ class FCN_Spect(nn.Module):
                 pred_image /= patch_count
                 return pred_image, mask
             else:
-                pred_image = torch.cat(pred_patches, dim=0)  # batched pathes
+                pred_image = torch.cat(pred_patches, dim=0)  # batched patches
                 gt_image = torch.cat(gt_patches, dim=0)
                 return pred_image, gt_image
 

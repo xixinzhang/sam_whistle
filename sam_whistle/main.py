@@ -171,7 +171,7 @@ def run_pu(args: Args):
         pbar.set_description(f"Epoch {epoch} Loss: {np.mean(epoch_losses)}")
 
         # Test model and save Model
-        model.eval()
+        model.eval()  # used as patches in same spect are batched
         test_losses = []
         for data in testloader:
             with torch.no_grad():
@@ -231,7 +231,7 @@ def run_fcn_spect(args: Args):
     losses = []
     min_test_loss = torch.inf
     # Train model
-    pbar = tqdm(range(args.pu_epochs))
+    pbar = tqdm(range(args.fcn_spect_epochs))
     for epoch in pbar:
         epoch_losses = []
         model.train()
@@ -303,7 +303,7 @@ def run_fcn_encoder(args: Args):
     if not args.freeze_img_encoder:
         encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=args.fcn_encoder_lr)
     if not args.freeze_mask_decoder:
-        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=args.fcn_decoder_lr)
+        decoder_optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.downsample.parameters()), lr=args.fcn_decoder_lr)
 
 
     # Load data
@@ -313,12 +313,12 @@ def run_fcn_encoder(args: Args):
     testset = WhistleDataset(args, 'test',spect_nchan=1)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
-    model.init_patch_ls(trainset[0][0].shape[-2:])
+    model.init_patch_ls()
     
     losses = []
     min_test_loss = torch.inf
     # Train model
-    pbar = tqdm(range(args.pu_epochs))
+    pbar = tqdm(range(args.fcn_encoder_epochs))
     for epoch in pbar:
         epoch_losses = []
         model.train()
@@ -347,14 +347,14 @@ def run_fcn_encoder(args: Args):
         pbar.set_description(f"Epoch {epoch} Loss: {np.mean(epoch_losses)}")
 
         # Test model and save Model
-        model.eval()
+        # model.eval() # not needed as batch size is 1, batch norm is unstable
         test_losses = []
-        for data in testloader:
+        for i, data in enumerate(trainloader):
             with torch.no_grad():
                 spect, mask = data
                 spect = spect.to(args.device)
                 mask = mask.to(args.device)
-                pred= model(spect)
+                pred = model(spect)
                 test_loss = loss_fn(pred, mask)
                 test_losses.append(test_loss.item())
         test_loss = np.mean(test_losses)
