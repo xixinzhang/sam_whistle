@@ -261,7 +261,7 @@ def run_fcn_spect(args: Args):
         model.eval()
         model.init_patch_ls(testset[0][0].shape[-2:])
         test_losses = []
-        for data in testloader:
+        for i, data in enumerate(tqdm(testloader)):
             with torch.no_grad():
                 spect, mask = data
                 spect = spect.to(args.device)
@@ -349,7 +349,7 @@ def run_fcn_encoder(args: Args):
         # Test model and save Model
         # model.eval() # not needed as batch size is 1, batch norm is unstable
         test_losses = []
-        for i, data in enumerate(trainloader):
+        for i, data in enumerate(testloader):
             with torch.no_grad():
                 spect, mask = data
                 spect = spect.to(args.device)
