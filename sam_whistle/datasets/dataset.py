@@ -12,6 +12,8 @@ import struct
 import matplotlib.pyplot as plt
 import json
 from tqdm import tqdm
+import networkx as nx
+import sknw
 from skimage.morphology import skeletonize
 from scipy.interpolate import interp1d, splev, splrep
 from numpy.polynomial import Polynomial
@@ -22,6 +24,7 @@ import random
 import os 
 
 from segment_anything.utils.transforms import ResizeLongestSide
+from .utils import simplify_path, simplify_graph, graph_to_mask, sknw_graph_2_key_mask, graph_to_keymask
 from sam_whistle import utils, config, visualization
 
 
@@ -87,15 +90,35 @@ class WhistleDataset(Dataset):
         bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
         contours = [np.array(contour) for contour in contours]
         masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
-        gt_mask = utils.combine_masks(masks)
-        expand_gt_mask = self._expand_mask(gt_mask)
+        combined_gt_mask = utils.combine_masks(masks)
 
+        if not self.args.skeleton:
+            combined_gt_mask = self._expand_mask(combined_gt_mask)
+        else:
+            # combined_gt_mask = self._expand_mask(combined_gt_mask)
+            combined_gt_mask = self._skeletonize_mask(combined_gt_mask)
+            pass
+        
         if self.args.crop:
             spect = spect[-self.crop_top: -self.crop_bottom+1]
-            expand_gt_mask = expand_gt_mask[-self.crop_top: -self.crop_bottom+1]
+            combined_gt_mask = combined_gt_mask[-self.crop_top: -self.crop_bottom+1]
+
+        if self.args.skeleton and self.args.graph:
+            multi_edge = False
+            sknw_graph = sknw.build_sknw(combined_gt_mask, multi=multi_edge)
+            # keypoint_mask = sknw_graph_2_key_mask(sknw_graph, combined_gt_mask.shape, radius=3)
+
+            simplified_graph = simplify_graph(sknw_graph, tolerance=0.5, multi_edge=multi_edge)
+            combined_gt_mask = graph_to_mask(simplified_graph, combined_gt_mask.shape, width=2)
+            keypoint_mask = graph_to_keymask(simplified_graph, combined_gt_mask.shape, radius=2)
 
         spect= spect.transpose(-1, 0, 1) # [C, H, W]
-        expand_gt_mask = expand_gt_mask[np.newaxis, :, :]
+        combined_gt_mask = combined_gt_mask[np.newaxis, :, :]
+        
+        data =  {
+                "spect": spect, 
+                "contour_mask": combined_gt_mask, 
+        }
 
         if self.args.use_prompt:
             if self.args.sample_points is None:
@@ -105,30 +128,55 @@ class WhistleDataset(Dataset):
             elif self.args.sample_points == "box":
                 points_prompt = utils.sample_points_box(masks, self.args.num_pos_points, self.args.num_neg_points, self.args.box_pad)
 
-            return spect, expand_gt_mask, points_prompt
-        else:
-            return spect, expand_gt_mask
+            data["points_prompt"]= points_prompt
+
+        if self.args.skeleton and self.args.graph:
+            data["keypoint_mask"] = keypoint_mask
+
+        return data
 
     def _get_gt_masks(self, shape, contours, interp=None):
+        """"Get binary mask from each contour"""
         masks = []
-        for contour in contours:
+        for i, contour in enumerate(contours):
             ma= np.zeros(shape)
-
+            
             x, y = contour[:, 0], contour[:, 1]
-
             x_min, x_max = x.min(), x.max()
-            new_x = np.linspace(x_min, x_max, len(x)*2, endpoint=True)
+            y_min, y_max = y.min(), y.max()
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+            if x_range > y_range:
+                new_x = np.arange(int(x_min), int(x_max)+1)
+                x_order = np.argsort(x)
+                x = x[x_order]
+                y = y[x_order]
 
-            if interp == "linear":
-                new_y = np.interp(new_x, x, y)
-            elif interp == "polynomial":
-                poly_interp = Polynomial.fit(x, y, 3)
-                new_y = poly_interp(new_x)
-            elif interp == "spline":
-                splline_interp = splrep(x, y, k=3)
-                new_y = splev(new_x, splline_interp)
+                if interp == "linear":
+                    new_y = np.interp(new_x, x, y)
+                elif interp == "polynomial":
+                    poly_interp = Polynomial.fit(x, y, 3)
+                    new_y = poly_interp(new_x)
+                elif interp == "spline":
+                    splline_interp = splrep(x, y, k=3)
+                    new_y = splev(new_x, splline_interp)
+                else:
+                    raise ValueError("Interpolation method not supported")
             else:
-                raise ValueError("Interpolation method not supported")
+                new_y = np.arange(int(y_min), int(y_max)+1)
+                y_order = np.argsort(y)
+                x = x[y_order]
+                y = y[y_order]
+                if interp == "linear":
+                    new_x = np.interp(new_y, y, x)
+                elif interp == "polynomial":
+                    poly_interp = Polynomial.fit(y, x, 3)
+                    new_x = poly_interp(new_y)
+                elif interp == "spline":
+                    splline_interp = splrep(y, x, k=3)
+                    new_x = splev(new_y, splline_interp)
+                else:
+                    raise ValueError("Interpolation method not supported")
             
             new_x = np.maximum(0, np.minimum(new_x, shape[1]-1)).astype(int)
             new_y = np.maximum(0, np.minimum(new_y, shape[0]-1)).astype(int)
@@ -143,7 +191,17 @@ class WhistleDataset(Dataset):
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         dilated = cv2.dilate(mask, kernel, iterations=1)
         return dilated
-        
+
+    def _skeletonize_mask(self, mask):
+        """skeletonize the binary mask"""
+        mask = mask.astype(np.uint8)
+        skeleton = skeletonize(mask)
+        return skeleton.astype(np.uint8)    
+
+    def _skeleton2graph(self, skeleton):
+        """convert skeleton to graph"""
+        multi_edge = True
+        graph = sknw.build_sknw(skeleton, multi=multi_edge)
 
     def _get_dataset_meta(self, train_anno_dir = 'train_puli', test_anno_dir = 'test_puli'):
 

@@ -30,10 +30,8 @@ def evaluate_sam(args: Args):
     if not os.path.exists(output_path) and args.visualize_eval:
         os.makedirs(output_path)
     
-    # trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
-    # trainloader = DataLoader(trainset, batch_size=1, shuffle=False, num_workers=os.cpu_count(), drop_last=True)
     testset = WhistleDataset(args, 'test',model.sam_model.image_encoder.img_size)
-    testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=os.cpu_count(),)
+    testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Test set size: {len(testset)}")
 
     model.eval()
@@ -42,14 +40,14 @@ def evaluate_sam(args: Args):
     pred_masks = []
     for i, data in enumerate(tqdm(testloader)):
         with torch.no_grad():
-            spect, gt_mask= data 
+            spect, gt_mask= data['spect'], data['contour_mask']
             loss, pred_mask, low_mask, _ = model(data)
             gt_masks.append(gt_mask)
             pred_masks.append(pred_mask)
             if args.visualize_eval:
                 # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
                 spect = spect.permute(0, 2, 3, 1)
-                visualize(spect, gt_mask, pred_mask, output_path, i)
+                visualize(spect, gt_mask, pred_mask, output_path, str(i)+"_cropped")
             test_losses.append(loss.item())
 
     test_loss = np.mean(test_losses)

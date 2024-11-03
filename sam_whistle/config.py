@@ -18,6 +18,9 @@ class Args:
     frame_ms: int = 8
     hop_ms: int = 2
     split_ms: int = 3000
+    # GT mask
+    skeleton: bool = True
+    graph: bool = True
     # crop
     crop: bool = True
     max_freq: int = 50000
@@ -37,7 +40,7 @@ class Args:
     box_pad: Optional[int] = 5  # 3
     thickness: Optional[int] = 3  # 3
     sample_points: Literal["random", "box"] = 'box'
-    interpolation: Literal["linear", "polynomial", "spline"] = 'linear'
+    interpolation: Literal["linear", "polynomial", "spline"] = 'linear' # linear for graph construction
     
     num_workers: int = 8
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'

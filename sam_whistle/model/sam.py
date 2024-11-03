@@ -99,7 +99,7 @@ class SAM_whistle(nn.Module):
                 masks=None
             )   
         else:
-            spect, gt_mask= data
+            spect, gt_mask= data['spect'], data['contour_mask']
 
         spect = spect.to(self.device)
         transformed_spect = self.transform.apply_image_torch(spect)

@@ -10,10 +10,16 @@ def show_spect(spect:np.array, fig, save:str = None):
     ax = fig.gca()
     ax.imshow(spect[::-1], origin='lower',cmap='viridis')
     ax.axis('on')
-    y_ticks = np.linspace(0, spect.shape[0] - 1, num=5)
-    y_labels = [5000, 15000, 25000, 35000, 50000]
+    y_ticks = np.linspace(0, spect.shape[0] - 1, num=10)
+    y_labels = np.round(np.linspace(5, 50, num=10), 2)
+    x_ticks = np.linspace(0, spect.shape[1] - 1, num=10)
+    x_labels = np.round(np.linspace(0, 3, num=10), 2)
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels)
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Frequency (kHz)')
     fig.tight_layout()
     if save:
         fig.savefig(save, bbox_inches='tight')
