@@ -2,6 +2,7 @@ from shapely.geometry import LineString
 import numpy as np
 import networkx as nx
 import cv2
+import sknw
 
 def simplify_path(pts, tolerance=0.5):
     """Simplify the sequence of points between nodes using Shapely."""
@@ -78,3 +79,9 @@ def sknw_graph_2_key_mask(graph, img_shape, radius=3):
         cv2.circle(mask, pt[::-1], radius, 1, -1)
 
     return mask
+
+
+def skeleton2graph(skeleton):
+    """convert skeleton to graph"""
+    multi_edge = True
+    graph = sknw.build_sknw(skeleton, multi=multi_edge)

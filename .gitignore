@@ -1,5 +1,5 @@
 // This file is used to ignore files and directories in the repository
-checkpoints/*
+*checkpoints/*
 !checkpoints/.gitkeep
 data/*
 !data/.gitkeep

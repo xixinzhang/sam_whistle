@@ -5,7 +5,7 @@ from torch.nn.functional import normalize, threshold, interpolate, pad
 
 from sam_whistle.model import Detection_ResNet_BN2
 from sam_whistle.config import Args
-from sam_whistle.visualization import visualize_array
+from sam_whistle.utils.visualize import visualize_array
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything.modeling.common import LayerNorm2d
 

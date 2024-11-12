@@ -1,374 +1,230 @@
 import shutil
 import torch
-from torch import nn
-import torchaudio
-import torchaudio.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import default_collate
 from PIL import Image
 import numpy as np
 from pathlib import Path
 import tyro
-import struct 
 import matplotlib.pyplot as plt
 import json
 from tqdm import tqdm
-import networkx as nx
-import sknw
-from skimage.morphology import skeletonize
-from scipy.interpolate import interp1d, splev, splrep
-from numpy.polynomial import Polynomial
-import cv2
 import lmdb
 import pickle
 import random
 import os 
 
 from segment_anything.utils.transforms import ResizeLongestSide
-from .utils import simplify_path, simplify_graph, graph_to_mask, sknw_graph_2_key_mask, graph_to_keymask
-from sam_whistle import utils, config, visualization
+from sam_whistle import utils, config
 
 
+def custom_collate_fn(batch):
+    specs = [item['spect'] for item in batch]
+    masks = [item['gt_mask'] for item in batch]
+    infos = [item['info'] for item in batch]
+
+    return {
+        'spect': default_collate(specs),
+        'gt_mask': default_collate(masks),
+        'info': infos
+    }
+            
 class WhistleDataset(Dataset):
-    def __init__(self, args:config.Args, split='train', img_size=1024, spect_nchan=3):
-        self.args = args
-        self.data_dir = Path(args.path)
-        self.preprocess_dir = self.data_dir / 'preprocessed'       
-        self.meta = self._get_dataset_meta()
-        self.split = split
-        self.spect_nchan = spect_nchan
-        self.transform = ResizeLongestSide(img_size)
-        if args.preprocess:
-            # self._wave2spect("palmyra092007FS192-071012-010614", "train", empty=True)
-            # self._wave2spect("palmyra092007FS192-070924-205730", "test", empty=True)
-            self.preprocess(split)
-        else:
-            for stem in self.meta['train']:
-                if not (self.preprocess_dir / f'train/{stem}').exists():
-                    raise FileNotFoundError(f'{stem} not found in train')
-        if args.crop:
-            self.freq_resolution = 1000 // args.frame_ms
-            self.time_resolution = args.hop_ms
-            self.crop_bottom = args.min_freq // self.freq_resolution
-            self.crop_top = args.max_freq // self.freq_resolution
-
-        if split == 'train':
-            train_files = list((self.preprocess_dir / 'train').glob('*/*.npz'))
-            self.idx2file = {i: f for i, f in enumerate(train_files)}
-        else:
-            test_files = list((self.preprocess_dir / 'test').glob('*/*.npz'))
-            self.idx2file = {i: f for i, f in enumerate(test_files)}
+    def __init__(self, args: config.SAMConfig, split='train', img_size=1024, spec_nchan=3):
+        self.args = args.spec_config
+        self.debug = args.debug
         
-        with open(self.preprocess_dir/split /'annotation.json', 'r') as f:
-            self.all_ann_dict = json.load(f)
+        self.split = split
+        self.root_dir = Path(self.args.root_dir)
+        self.processed_dir = self.root_dir / 'processed'    
+        self.audio_dir = self.root_dir / 'audio'
+        self.anno_dir = self.root_dir / 'annotation'
+        self.meta_file = self.root_dir / self.args.meta_file
+        self.meta = self._get_dataset_meta()
+        self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
 
-        self.spect_ids = list(self.idx2file.keys())
-        self.interpolation = args.interpolation
+        self.spec_nchan = spec_nchan
+        self.transform = ResizeLongestSide(img_size)
+
+        if self.args.preprocess:
+            self._preprocess()
+        else:
+            # check if all files are processed
+            for stem in self.meta:
+                if not (self.processed_dir / f'{split}/{stem}/spec.pt').exists():
+                    raise FileNotFoundError(f'{stem}.wav not found in split: {split}')
+                if not (self.processed_dir / f'{split}/{stem}/anno.pkl').exists():
+                    raise FileNotFoundError(f'{stem}.bin not found in split: {split}')
+        
+        self.spec_lens = []
+        self.interp = self.args.interp
+        self.data = self._annotation_to_mask()
+        self.spec_prob = [l/ sum(self.spec_lens) for l in self.spec_lens]
+
+        if split == 'test':
+            self.test_blocks = []
+            for i, stem in enumerate(self.meta):
+                n_blocks = self.spec_lens[i] // self.args.block_size
+                slices = [(i, slice(j*self.args.block_size, (j+1)*self.args.block_size)) for j in range(n_blocks)]
+                self.test_blocks.extend(slices)
+        
+        if split == 'train':
+            self.train_blocks = []
+            for i, stem in enumerate(self.meta):
+                n_blocks = self.spec_lens[i] // self.args.block_size
+                slices = [(i, slice(j*self.args.block_size, (j+1)*self.args.block_size)) for j in range(n_blocks)]
+                self.train_blocks.extend(slices)
 
     def __len__(self):
-        return len(self.spect_ids)
+        if self.split == 'train':
+            if not self.debug and self.args.block_multi > 1:
+                return len(self.train_blocks) * self.args.block_multi
+            else:
+                return len(self.train_blocks)
+        elif self.split == 'test':
+            return len(self.test_blocks)
+        else:
+            raise ValueError(f'{self.split} not supported')
 
     def __getitem__(self, idx):
-        spect_path = self.idx2file[idx]
-        # print(spect_path)
-        file_id = spect_path.parent.name
-        spect_split_id = int(spect_path.stem)
-        spect = np.load(spect_path)['arr_0']
-        if self.spect_nchan == 3:
-            spect = np.stack([spect, spect, spect], axis=-1) # [H, W, C]
-        elif self.spect_nchan == 1:
-            spect = spect[:, :, np.newaxis]
-        ann_dict = self.all_ann_dict[file_id]
-        anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
-        bboxes = []
-        # masks = []
-        contours = []
-        # height, width, _ = spect.shape
-        for contour, bbox in zip(anns['contours'], anns['bboxes']):
-            contours.append(contour)
-            bboxes.append(bbox)
-        # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
-        bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
-        contours = [np.array(contour) for contour in contours]
-        masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
-        combined_gt_mask = utils.combine_masks(masks)
-
-        if not self.args.skeleton:
-            combined_gt_mask = self._expand_mask(combined_gt_mask)
+        if self.split == 'train':
+            if not self.debug and self.args.block_multi > 1:
+                spect_idx = np.random.choice(len(self.data), p=self.spec_prob)
+                spec_len = self.spec_lens[spect_idx]
+                block_start = np.random.randint(0, spec_len - self.args.block_size)
+                block_end = block_start + self.args.block_size
+                block_slice = slice(block_start, block_end)
+            else:
+                spect_idx, block_slice = self.train_blocks[idx]
         else:
-            # combined_gt_mask = self._expand_mask(combined_gt_mask)
-            combined_gt_mask = self._skeletonize_mask(combined_gt_mask)
-            pass
-        
+            spect_idx, block_slice = self.test_blocks[idx]
+
+        spect = self.data[spect_idx]['spect'][:, :, block_slice]
+        gt_mask = self.data[spect_idx]['mask'][:, block_slice][None]
+
+        if self.spec_nchan == 3:
+            spect = torch.cat([spect, spect, spect], axis=0) # [C, H, W]
+
+        # crop high and low freq
         if self.args.crop:
-            spect = spect[-self.crop_top: -self.crop_bottom+1]
-            combined_gt_mask = combined_gt_mask[-self.crop_top: -self.crop_bottom+1]
-
-        if self.args.skeleton and self.args.graph:
-            multi_edge = False
-            sknw_graph = sknw.build_sknw(combined_gt_mask, multi=multi_edge)
-            # keypoint_mask = sknw_graph_2_key_mask(sknw_graph, combined_gt_mask.shape, radius=3)
-
-            simplified_graph = simplify_graph(sknw_graph, tolerance=0.5, multi_edge=multi_edge)
-            combined_gt_mask = graph_to_mask(simplified_graph, combined_gt_mask.shape, width=2)
-            keypoint_mask = graph_to_keymask(simplified_graph, combined_gt_mask.shape, radius=2)
-
-        spect= spect.transpose(-1, 0, 1) # [C, H, W]
-        combined_gt_mask = combined_gt_mask[np.newaxis, :, :]
-        
+            spect = spect[:, -self.args.crop_top: -self.args.crop_bottom+1]
+            gt_mask = gt_mask[:, -self.args.crop_top: -self.args.crop_bottom+1]
+    
         data =  {
-                "spect": spect, 
-                "contour_mask": combined_gt_mask, 
+            "spect": spect, 
+            "gt_mask": gt_mask,
+            "info": {'spec_idx':spect_idx, 'block_slice':block_slice}
         }
 
-        if self.args.use_prompt:
-            if self.args.sample_points is None:
-                points_prompt = None
-            elif self.args.sample_points == "random":
-                points_prompt = utils.sample_points_random(masks, self.args.num_pos_points, self.args.num_neg_points)
-            elif self.args.sample_points == "box":
-                points_prompt = utils.sample_points_box(masks, self.args.num_pos_points, self.args.num_neg_points, self.args.box_pad)
-
-            data["points_prompt"]= points_prompt
-
-        if self.args.skeleton and self.args.graph:
-            data["keypoint_mask"] = keypoint_mask
-
         return data
+    
+    def _get_dataset_meta(self):
+        if self.debug and not self.args.all_data:
+            meta ={
+                'train':['palmyra092007FS192-071012-010614'],
+                'test':['palmyra092007FS192-070924-205730']
+            }
+        else:
+            meta = json.load(open(self.meta_file, 'r'))
 
-    def _get_gt_masks(self, shape, contours, interp=None):
+        return meta[self.split]
+        
+        
+    def _preprocess(self):
+        for stem in self.meta:
+            self._wave_to_data(stem, empty=True)
+
+    def _wave_to_data(self, stem, empty=False):
+        """process one audio file to spectrogram images and get annotations"""
+        # spcet
+        audio_file = self.audio_dir / f'{stem}.wav'
+        bin_file = self.anno_dir/ f'{stem}.bin'
+        waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
+        spec_db= utils.wave_to_spectrogram(waveform, sample_rate, **vars(self.args))
+
+        # annotations
+        height = spec_db.shape[-2]
+        annos = utils.load_annotation(bin_file)
+
+        spec_annos = []
+        for anno in tqdm(annos, desc='process annotation'):
+            spec_anno = utils.anno_to_spec_point(anno, height, self.args.hop_ms, self.args.freq_bin)
+            spec_annos.append(spec_anno)
+
+        # save spec and annotation
+        if empty:
+            path = self.processed_dir / f'{self.split}/{stem}'
+            if path.exists():
+                shutil.rmtree(path)
+            path.mkdir(parents=True, exist_ok=True)
+        torch.save(spec_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
+        with open(self.processed_dir / f'{self.split}/{stem}/anno.pkl', 'wb') as f:
+            pickle.dump(spec_annos, f)
+        
+
+    def _load_processed_data(self, stem=None):
+        """load preprocessed data"""
+        spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt')
+        with open(self.processed_dir / f'{self.split}/{stem}/anno.pkl', 'rb') as f:
+            annos = pickle.load(f)
+        return  spect, annos
+
+    def _get_gt_masks(self, spect, contours, interp='linear'):
         """"Get binary mask from each contour"""
-        masks = []
+        # filter out data w/o annotation
+        # target at data like palmyra092007FS192-070924-210000
+        x_bound = np.max([contour[:, 0].max() for contour in contours])
+        x_bound = int(np.ceil(x_bound))
+        spect = spect[..., :x_bound]
+        
+        # extract mask from contours
+        shape = spect.shape[-2:] 
+        mask= np.zeros(shape)
         for i, contour in enumerate(contours):
-            ma= np.zeros(shape)
-            
             x, y = contour[:, 0], contour[:, 1]
             x_min, x_max = x.min(), x.max()
-            y_min, y_max = y.min(), y.max()
-            x_range = x_max - x_min
-            y_range = y_max - y_min
-            if x_range > y_range:
-                new_x = np.arange(int(x_min), int(x_max)+1)
-                x_order = np.argsort(x)
-                x = x[x_order]
-                y = y[x_order]
+            x_order = np.argsort(x)
+            x = x[x_order]
+            y = y[x_order]
 
-                if interp == "linear":
-                    new_y = np.interp(new_x, x, y)
-                elif interp == "polynomial":
-                    poly_interp = Polynomial.fit(x, y, 3)
-                    new_y = poly_interp(new_x)
-                elif interp == "spline":
-                    splline_interp = splrep(x, y, k=3)
-                    new_y = splev(new_x, splline_interp)
-                else:
-                    raise ValueError("Interpolation method not supported")
+            length = len(x)
+            if self.args.origin_annos:
+                new_x = x
+                new_y = y
             else:
-                new_y = np.arange(int(y_min), int(y_max)+1)
-                y_order = np.argsort(y)
-                x = x[y_order]
-                y = y[y_order]
-                if interp == "linear":
-                    new_x = np.interp(new_y, y, x)
-                elif interp == "polynomial":
-                    poly_interp = Polynomial.fit(y, x, 3)
-                    new_x = poly_interp(new_y)
-                elif interp == "spline":
-                    splline_interp = splrep(y, x, k=3)
-                    new_x = splev(new_y, splline_interp)
-                else:
-                    raise ValueError("Interpolation method not supported")
+                new_x = np.linspace(x_min, x_max, length*10, endpoint=True)
+                new_y = utils.interpolate_anno_point(new_x, x, y, interp)
             
             new_x = np.maximum(0, np.minimum(new_x, shape[1]-1)).astype(int)
             new_y = np.maximum(0, np.minimum(new_y, shape[0]-1)).astype(int)
-  
+
             for y, x in zip(new_y, new_x):
-                ma[y, x] = 1
-            masks.append(ma)
-        return masks
-
-    def _expand_mask(self, mask, kernel_size=3):
-        """dilate the mask"""
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated = cv2.dilate(mask, kernel, iterations=1)
-        return dilated
-
-    def _skeletonize_mask(self, mask):
-        """skeletonize the binary mask"""
-        mask = mask.astype(np.uint8)
-        skeleton = skeletonize(mask)
-        return skeleton.astype(np.uint8)    
-
-    def _skeleton2graph(self, skeleton):
-        """convert skeleton to graph"""
-        multi_edge = True
-        graph = sknw.build_sknw(skeleton, multi=multi_edge)
-
-    def _get_dataset_meta(self, train_anno_dir = 'train_puli', test_anno_dir = 'test_puli'):
-
-        train_anno_dir = self.data_dir / train_anno_dir
-        test_anno_dir = self.data_dir / test_anno_dir
-        train_anno_files = list(train_anno_dir.glob('*.bin'))
-        test_anno_files = list(test_anno_dir.glob('*.bin'))
-        meta = {
-            'train':  [f.stem for f in train_anno_files if f.stat().st_size > 0],
-            'test': [f.stem for f in test_anno_files if f.stat().st_size > 0]
-        }
-        return meta
-
-    def preprocess(self, split = 'train'):
-        all_ann_dict = {}
-        for stem in self.meta[split]:
-            ann_dict = self._wave2spect(stem, data_split=split, empty=True)
-            all_ann_dict.update(ann_dict)
-
-        split_dir = self.preprocess_dir / split
-        with open(split_dir/'annotation.json', 'w') as f:
-            json.dump(all_ann_dict, f) # {{file: {split_id: [contour]}}
-        
-
-    def _load_annotation(self, stem, anno_dir):
-        """Read the .bin file and obtain annotations of each contour"""
-        bin_file = self.data_dir / anno_dir / f'{stem}.bin'
-        data_format = 'dd'  # 2 double-precision [time(s), frequency(Hz)]
-        with open(bin_file, 'rb') as f:
-            bytes = f.read()
-            total_bytes_num = len(bytes)
-            if total_bytes_num==0:
-                print(f'{bin_file}: EOF')
-                return
-            cur = 0
-            annos = []
-            while True:
-                # iterater over each contour
-                num_point = struct.unpack('>i', bytes[cur: cur+4])[0]
-                format_str = f'>{num_point * data_format}'
-                point_bytes_num = struct.calcsize(format_str)
-                cur += 4
-                data = struct.unpack(f'{format_str}', bytes[cur:cur+point_bytes_num])
-                num_dim = 2
-                data = np.array(data).reshape(-1, num_dim)
-                annos.append(data)
-                cur += point_bytes_num
-                if cur >= total_bytes_num:
-                    break
-            print(f'{bin_file} has {len(annos)} contours')
-            return annos
-
-
-    def _load_audio(self, stem, audio_dir='audio'):
-        """Load audio data and get the signal info"""
-        audio_dir = self.data_dir / audio_dir
-        audio_file = audio_dir / f'{stem}.wav'
-        info = torchaudio.info(audio_file)
-        waveform, _ = torchaudio.load(audio_file)
-        return waveform, info                 
-
-    def _wave2spect(self, stem, data_split='train', empty=False):
-        """process one audio file to spectrogram images and get annotations"""
-        # spcet
-        waveform, info = self._load_audio(stem)
-        if self.args.n_fft is None:
-            assert self.args.frame_ms and self.args.hop_ms
-            frame_ms = self.args.frame_ms
-            hop_ms = self.args.hop_ms
-            n_fft = int(frame_ms /1000 * info.sample_rate)
-            hop_length = int(hop_ms /1000 * info.sample_rate)
-        else:
-            n_fft = self.args.n_fft
-            hop_length = self.args.hop_length
-            hop_ms  = hop_length / info.sample_rate * 1000
-            frame_ms  = n_fft / info.sample_rate * 1000
-            
-        spec = F.spectrogram(waveform[0], pad = 0, window = torch.hamming_window(n_fft), n_fft=n_fft, hop_length=hop_length, win_length=n_fft, power=2, normalized=False)
-        spec_db = F.amplitude_to_DB(spec, multiplier=10, amin = 1e-10, db_multiplier=0)
-        spec_db = torch.flip(spec_db, [0])
-        spec_db = (spec_db - spec_db.min()) / (spec_db.max() - spec_db.min())  # normalize to [0, 1]
-        height, width = spec_db.shape
-
-        # annotations
-        ann_dict = {}
-        anno_dir = data_split + '_puli'
-        annos = self._load_annotation(stem, anno_dir)
-
-        def get_anns(contour, span_id):
-            if span_id not in ann_dict:
-                ann_dict[span_id] = {'contours':[], 'bboxes':[], 'masks':[]}
-            xcoord, ycoord = contour[:, 0], contour[:, 1]
-            bbox = [xcoord.min(), ycoord.min(), xcoord.max(), ycoord.max()]
-            # mask_vertics = contour.astype(np.int32)
-            ann_dict[span_id]['contours'].append(contour.tolist())
-            ann_dict[span_id]['bboxes'].append(bbox)
-            # ann_dict[span_id]['masks'].append(mask_vertics.tolist())
-
-        for ann in tqdm(annos, desc='process annotation'):
-            ann = np.array(ann)
-            # ann = np.sort(ann, axis=0)
-            sorted_indices = np.argsort(ann[:, 0])
-            ann = ann[sorted_indices]
-            ann[:, 0] = ann[:, 0] * 1000 # ms
-            min_time, max_time = ann[:, 0].min(), ann[:, 0].max()
-            start_span_id = int(min_time // self.args.split_ms)
-            end_span_id = int(max_time // self.args.split_ms)
-            span_start_ms = start_span_id * self.args.split_ms
-            rela_time = ann[:, 0] - span_start_ms
-            
-            if start_span_id == end_span_id:
-                # non-cut
-                x = rela_time / hop_ms
-                y = ann[:, 1] / (info.sample_rate/ n_fft)  # top-down frequency
-                y_bottom = height - y # bottom-up frequency
-                contour = np.stack([x, y_bottom], axis=-1)
-                get_anns(contour, start_span_id)
+                mask[y, x] = 1
+        return spect, mask
+    
+    def _annotation_to_mask(self):
+        data = {}
+        for i, stem in enumerate(tqdm(self.meta, desc=f"Masking {self.split}'s annotations")):
+            spec, annos = self._load_processed_data(stem)
+            # Get gt mask from annotation
+            # Quaility of annotation varies and some annotation are missing
+            spec, gt_mask = self._get_gt_masks(spec, annos, interp=self.interp)
+            self.spec_lens.append(spec.shape[-1])
+            if not self.args.skeleton:
+                gt_mask = utils.dilate_mask(gt_mask)
+                pass
             else:
-                # cut
-                # in
-                in_mask = rela_time<self.args.split_ms
-                x = rela_time[in_mask] / hop_ms 
-                y = ann[:, 1][in_mask] / (info.sample_rate/ n_fft)  # top-down frequency
-                y_bottom = height - y # bottom-up frequency
-                contour = np.stack([x, y_bottom], axis=-1)
-                get_anns(contour, start_span_id)
-                # out
-                out_mask = rela_time>=self.args.split_ms
-                x = (rela_time[out_mask] - self.args.split_ms) / hop_ms 
-                y = ann[:, 1][out_mask] / (info.sample_rate/ n_fft)
-                y_bottom = height - y
-                contour = np.stack([x, y_bottom], axis=-1)
-                get_anns(contour, end_span_id)
-
-
-     
-        # save to sepectrogram images
-        split_pix = int(self.args.split_ms // hop_ms)
-        num_split = spec_db.shape[1] // split_pix # throw away the last part
-        print(f'{stem} has {num_split} splits')
-        spec_db_li = torch.split(spec_db, split_pix, dim=1)
-        all_span_ids = list(range(len(spec_db_li)))
-        if spec_db_li[-1].shape[1] < split_pix:
-            ann_dict.pop(len(spec_db_li)-1, None)
-        ann_span_ids = list(ann_dict.keys())
-
-        spec_dir = self.preprocess_dir / f'spectrogram/{stem}'
-        split_dir = self.preprocess_dir / f'{data_split}/{stem}'
-        if empty and spec_dir.exists():
-            shutil.rmtree(spec_dir)
-        if empty and split_dir.exists():
-            shutil.rmtree(split_dir)
-        spec_dir.mkdir(parents= True,exist_ok=True)
-        split_dir.mkdir(parents= True,exist_ok=True)
-        self._save_spect(spec_db_li, ann_span_ids, split_dir,  gt=True, normalized=True, ann_dict=ann_dict)
-        self._save_spect(spec_db_li, all_span_ids, spec_dir, gt=True, ann_dict=ann_dict, )
-        
-        # save annotation
-        return {stem: ann_dict}
-
+                gt_mask = utils.skeletonize_mask(gt_mask)
+            data[i] = {'spect':spec, 'mask':gt_mask}
+        return data
+            
 
     def _save_spect(self, spec_db_li, span_ids, save_dir, normalized=False, gt=False, ann_dict=None):
         for i in tqdm(span_ids, desc='save spectrogram'):
             sub_spec = spec_db_li[i]
             img_path = save_dir / f'{str(i).zfill(5)}.png'
             # save image
-            image_array = (sub_spec.numpy()*255).astype(np.uint8)
+            image_array = (sub_spec.numpy()*255).astype(np.uint8)[0]
             image = Image.fromarray(image_array)
             image.save(img_path)
             # save normalized spectrogram
@@ -405,8 +261,8 @@ class WhistlePatch(WhistleDataset):
         else:
             self.stride = self.patch_size
 
-        self.lmdb_path = self.preprocess_dir / f'patch_{split}.lmdb'
-        self.balanced_lmdb_path = self.preprocess_dir / f'balanced_patch_{split}.lmdb'
+        self.lmdb_path = self.processed_dir / f'patch_{split}.lmdb'
+        self.balanced_lmdb_path = self.processed_dir / f'balanced_patch_{split}.lmdb'
         self.lmdb_path = str(self.lmdb_path)
         self.balanced_lmdb_path = str(self.balanced_lmdb_path)
         if args.patch_cached:
@@ -438,9 +294,9 @@ class WhistlePatch(WhistleDataset):
                 # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
                 bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
                 contours = [np.array(contour) for contour in contours]
-                masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interpolation)
+                masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interp)
                 gt_mask = utils.combine_masks(masks)
-                expand_gt_mask = self._expand_mask(gt_mask)
+                expand_gt_mask = self._dilate_mask(gt_mask)
 
                 if args.crop:
                     spect = spect[-self.crop_top: -self.crop_bottom+1]
@@ -624,21 +480,49 @@ class WhistlePatch(WhistleDataset):
             return img_patch, mask_patch, meta
 
 
+def check_spec_dataset():
+    args = tyro.cli(config.SAMConfig)
+    train_set = WhistleDataset(args, 'train', spec_nchan=1)
+    test_set = WhistleDataset(args, 'test', spec_nchan=1)
+    print(f'Train blocks: {len(train_set)}, Test blocks: {len(test_set)}')
+    
+    for stem in train_set.meta:
+        shutil.rmtree(f'outputs/debug/train/{stem}', ignore_errors=True)
+    for i, data in enumerate(tqdm(train_set, desc='check train set')):
+        spec, mask, info = data['spect'], data['gt_mask'], data['info']
+        spec_id = info['spec_idx']
+        stem = train_set.meta[spec_id]
+        save_dir=f'outputs/debug/train/{stem}'
+        utils.visualize_array(spec, cmap='bone', filename=f'train_{info["block_slice"].start}_0.spec', save_dir = save_dir)
+        utils.visualize_array(mask, cmap='gray', filename=f'train_{info["block_slice"].start}_1.mask', save_dir = save_dir)
+
+    for stem in test_set.meta:
+        shutil.rmtree(f'outputs/debug/test/{stem}', ignore_errors=True)
+    for i, data in enumerate(tqdm(test_set, desc='check test set')):
+        spec, mask, info = data['spect'], data['gt_mask'], data['info']
+        spec_id = info['spec_idx']
+        stem = test_set.meta[spec_id]
+        save_dir=f'outputs/debug/test/{stem}'
+        utils.visualize_array(spec, cmap='bone',filename=f'test_{info["block_slice"].start}_0.spec', save_dir = save_dir)
+        utils.visualize_array(mask, cmap='gray',filename=f'test_{info["block_slice"].start}_1.gt', save_dir = save_dir)
+
+def check_spec_block(spec_idx, start, split = 'train', ):
+    args = tyro.cli(config.SAMConfig)
+    data_set = WhistleDataset(args, split)
+    check_block = data_set.data[spec_idx]
+    spect = check_block['spect'][..., start:start+ args.spec_config.block_size]
+    mask = check_block['mask'][..., start:start+ args.spec_config.block_size]
+    utils.visualize_array(spect, cmap='magma')
+    utils.visualize_array(mask, cmap='gray')
+
 if __name__ == "__main__":
-    args = tyro.cli(config.Args)
-    print(args)
-    # WhistleDataset
-    # train_set = WhistleDataset(args, 'train')
-    # test_set = WhistleDataset(args, 'test')
-    # print("testing data done")
-    # print(len(train_set), len(test_set)) 
-    # data = train_set[0]
-    # print(data[0].shape, data[1].shape, )
+    # check_spec_dataset()
+    check_spec_block(0, 21000, 'test')
 
     # WhistlePatch
-    train_set = WhistlePatch(args, 'train')
+    # train_set = WhistlePatch(args, 'train')
     # test_set = WhistlePatch(args, 'test')
-    img, mask = train_set[0]
-    print(img.shape, mask.shape)
+    # img, mask = train_set[0]
+    # print(img.shape, mask.shape)
     # visualization.visualize_array(img, mask=mask, random_colors=False, filename='patch')
     # visualization.visualize_array(img, random_colors=False, filename='patch2')
