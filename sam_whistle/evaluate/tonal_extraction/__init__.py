@@ -12,12 +12,12 @@ jpype.startJVM(classpath=jar_files)
 # Import and test Java classes
 from tonals import *
 
-try:
-    tonal()  # Instantiate to check if the class loads correctly
-    ActiveSet()  # Instantiate to check if the class loads correctly
-    print("Java classes loaded successfully.")
-except Exception as e:
-    print("Could not load Java classes:", e)
+# try:
+#     tonal()
+#     ActiveSet()
+#     print("Java classes loaded successfully.")
+# except Exception as e:
+#     print("Could not load Java classes:", e)
 
 # Shutdown JVM when done (optional based on the use case)
 # jpype.shutdownJVM()

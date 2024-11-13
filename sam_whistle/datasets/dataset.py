@@ -30,23 +30,24 @@ def custom_collate_fn(batch):
     }
             
 class WhistleDataset(Dataset):
-    def __init__(self, args: config.SAMConfig, split='train', img_size=1024, spec_nchan=3):
-        self.args = args.spec_config
-        self.debug = args.debug
+    def __init__(self, cfg: config.SAMConfig, split='train', img_size=1024, spec_nchan=3):
+        self.cfg = cfg
+        self.spect_cfg = cfg.spect_config
+        self.debug = cfg.debug
         
         self.split = split
-        self.root_dir = Path(self.args.root_dir)
+        self.root_dir = Path(self.cfg.root_dir)
         self.processed_dir = self.root_dir / 'processed'    
         self.audio_dir = self.root_dir / 'audio'
         self.anno_dir = self.root_dir / 'annotation'
-        self.meta_file = self.root_dir / self.args.meta_file
+        self.meta_file = self.root_dir / self.cfg.meta_file
         self.meta = self._get_dataset_meta()
         self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
 
         self.spec_nchan = spec_nchan
         self.transform = ResizeLongestSide(img_size)
 
-        if self.args.preprocess:
+        if self.cfg.preprocess:
             self._preprocess()
         else:
             # check if all files are processed
@@ -57,28 +58,28 @@ class WhistleDataset(Dataset):
                     raise FileNotFoundError(f'{stem}.bin not found in split: {split}')
         
         self.spec_lens = []
-        self.interp = self.args.interp
+        self.interp = self.spect_cfg.interp
         self.data = self._annotation_to_mask()
         self.spec_prob = [l/ sum(self.spec_lens) for l in self.spec_lens]
 
         if split == 'test':
             self.test_blocks = []
             for i, stem in enumerate(self.meta):
-                n_blocks = self.spec_lens[i] // self.args.block_size
-                slices = [(i, slice(j*self.args.block_size, (j+1)*self.args.block_size)) for j in range(n_blocks)]
+                n_blocks = self.spec_lens[i] // self.spect_cfg.block_size
+                slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
                 self.test_blocks.extend(slices)
         
         if split == 'train':
             self.train_blocks = []
             for i, stem in enumerate(self.meta):
-                n_blocks = self.spec_lens[i] // self.args.block_size
-                slices = [(i, slice(j*self.args.block_size, (j+1)*self.args.block_size)) for j in range(n_blocks)]
+                n_blocks = self.spec_lens[i] // self.spect_cfg.block_size
+                slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
                 self.train_blocks.extend(slices)
 
     def __len__(self):
         if self.split == 'train':
-            if not self.debug and self.args.block_multi > 1:
-                return len(self.train_blocks) * self.args.block_multi
+            if not self.debug and self.spect_cfg.block_multi > 1:
+                return len(self.train_blocks) * self.spect_cfg.block_multi
             else:
                 return len(self.train_blocks)
         elif self.split == 'test':
@@ -88,11 +89,11 @@ class WhistleDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.split == 'train':
-            if not self.debug and self.args.block_multi > 1:
+            if not self.debug and self.spect_cfg.block_multi > 1:
                 spect_idx = np.random.choice(len(self.data), p=self.spec_prob)
                 spec_len = self.spec_lens[spect_idx]
-                block_start = np.random.randint(0, spec_len - self.args.block_size)
-                block_end = block_start + self.args.block_size
+                block_start = np.random.randint(0, spec_len - self.spect_cfg.block_size)
+                block_end = block_start + self.spect_cfg.block_size
                 block_slice = slice(block_start, block_end)
             else:
                 spect_idx, block_slice = self.train_blocks[idx]
@@ -106,9 +107,9 @@ class WhistleDataset(Dataset):
             spect = torch.cat([spect, spect, spect], axis=0) # [C, H, W]
 
         # crop high and low freq
-        if self.args.crop:
-            spect = spect[:, -self.args.crop_top: -self.args.crop_bottom+1]
-            gt_mask = gt_mask[:, -self.args.crop_top: -self.args.crop_bottom+1]
+        if self.spect_cfg.crop:
+            spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
+            gt_mask = gt_mask[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
     
         data =  {
             "spect": spect, 
@@ -119,7 +120,7 @@ class WhistleDataset(Dataset):
         return data
     
     def _get_dataset_meta(self):
-        if self.debug and not self.args.all_data:
+        if self.debug and not self.cfg.all_data:
             meta ={
                 'train':['palmyra092007FS192-071012-010614'],
                 'test':['palmyra092007FS192-070924-205730']
@@ -140,15 +141,17 @@ class WhistleDataset(Dataset):
         audio_file = self.audio_dir / f'{stem}.wav'
         bin_file = self.anno_dir/ f'{stem}.bin'
         waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
-        spec_db= utils.wave_to_spectrogram(waveform, sample_rate, **vars(self.args))
+        spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg))
+        print(f'\nLoaded spectrogram from {stem}, shape: {spec_power_db.shape},max: {spec_power_db.max():2f}, min: {spec_power_db.min():.2f}')
+        spec_power_db = utils.flip_and_normalize_spect(spec_power_db)
 
         # annotations
-        height = spec_db.shape[-2]
+        height = spec_power_db.shape[-2]
         annos = utils.load_annotation(bin_file)
 
         spec_annos = []
-        for anno in tqdm(annos, desc='process annotation'):
-            spec_anno = utils.anno_to_spec_point(anno, height, self.args.hop_ms, self.args.freq_bin)
+        for anno in tqdm(annos):
+            spec_anno = utils.anno_to_spec_point(anno, height, self.spect_cfg.hop_ms, self.spect_cfg.freq_bin)
             spec_annos.append(spec_anno)
 
         # save spec and annotation
@@ -157,7 +160,7 @@ class WhistleDataset(Dataset):
             if path.exists():
                 shutil.rmtree(path)
             path.mkdir(parents=True, exist_ok=True)
-        torch.save(spec_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
+        torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
         with open(self.processed_dir / f'{self.split}/{stem}/anno.pkl', 'wb') as f:
             pickle.dump(spec_annos, f)
         
@@ -188,7 +191,7 @@ class WhistleDataset(Dataset):
             y = y[x_order]
 
             length = len(x)
-            if self.args.origin_annos:
+            if self.spect_cfg.origin_annos:
                 new_x = x
                 new_y = y
             else:
@@ -210,7 +213,7 @@ class WhistleDataset(Dataset):
             # Quaility of annotation varies and some annotation are missing
             spec, gt_mask = self._get_gt_masks(spec, annos, interp=self.interp)
             self.spec_lens.append(spec.shape[-1])
-            if not self.args.skeleton:
+            if not self.spect_cfg.skeleton:
                 gt_mask = utils.dilate_mask(gt_mask)
                 pass
             else:
@@ -316,7 +319,7 @@ class WhistlePatch(WhistleDataset):
         print(f'Original lmdb for {split} has {self.env.stat()['entries']} entries')  
     
         if self.split == 'train':
-            if not self.args.balanced_cached:
+            if not self.spect_cfg.balanced_cached:
                 print('Balancing positive and negative patches...')
                 self._get_balanced_lmdb()
             self.balanced_env = lmdb.open(self.balanced_lmdb_path, readonly=True, lock=False)
@@ -480,10 +483,9 @@ class WhistlePatch(WhistleDataset):
             return img_patch, mask_patch, meta
 
 
-def check_spec_dataset():
-    args = tyro.cli(config.SAMConfig)
-    train_set = WhistleDataset(args, 'train', spec_nchan=1)
-    test_set = WhistleDataset(args, 'test', spec_nchan=1)
+def check_spec_dataset(cfg:config.SAMConfig):
+    train_set = WhistleDataset(cfg, 'train', spec_nchan=1)
+    test_set = WhistleDataset(cfg, 'test', spec_nchan=1)
     print(f'Train blocks: {len(train_set)}, Test blocks: {len(test_set)}')
     
     for stem in train_set.meta:
@@ -506,18 +508,18 @@ def check_spec_dataset():
         utils.visualize_array(spec, cmap='bone',filename=f'test_{info["block_slice"].start}_0.spec', save_dir = save_dir)
         utils.visualize_array(mask, cmap='gray',filename=f'test_{info["block_slice"].start}_1.gt', save_dir = save_dir)
 
-def check_spec_block(spec_idx, start, split = 'train', ):
-    args = tyro.cli(config.SAMConfig)
-    data_set = WhistleDataset(args, split)
+def check_spec_block(cfg:config.SAMConfig, spec_idx, start, split = 'train', ):
+    data_set = WhistleDataset(cfg, split)
     check_block = data_set.data[spec_idx]
-    spect = check_block['spect'][..., start:start+ args.spec_config.block_size]
-    mask = check_block['mask'][..., start:start+ args.spec_config.block_size]
+    spect = check_block['spect'][..., start:start+ cfg.spect_config.block_size]
+    mask = check_block['mask'][..., start:start+ cfg.spect_config.block_size]
     utils.visualize_array(spect, cmap='magma')
     utils.visualize_array(mask, cmap='gray')
 
 if __name__ == "__main__":
-    # check_spec_dataset()
-    check_spec_block(0, 21000, 'test')
+    cfg = tyro.cli(config.SAMConfig)
+    check_spec_dataset(cfg)
+    # check_spec_block(0, 21000, 'test')
 
     # WhistlePatch
     # train_set = WhistlePatch(args, 'train')

@@ -2,14 +2,10 @@ from dataclasses import dataclass, asdict
 from typing import Optional, Literal
 import torch
 import tyro
+import numpy as np
 
 @dataclass
-class SpecConfig:
-    all_data: bool = False
-    preprocess: bool = False
-
-    root_dir: str = 'data/dclde'
-    meta_file: str = 'meta.json'
+class SpectConfig:
     pad: int = 0
     # ms based fft params
     frame_ms: int = 8
@@ -17,17 +13,21 @@ class SpecConfig:
     freq_bin: int = 1000 // frame_ms
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
-    top_db: float = 100
+    top_db: Optional[None] = None
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
     block_multi: int = 5
     # crop
-    crop: bool = False
+    crop: bool = True
     max_freq: int = 50000
     min_freq: int = 5000
     crop_bottom: int = min_freq // freq_bin
     crop_top: int= max_freq // freq_bin
+    # snr
+    snr_spect: bool = True
+    click_thr_db: float = 10
+    broadband:float = 0.01
     # GT mask
     skeleton: bool = False
     interp: Literal["linear", "polynomial", "spline"] = 'linear'
@@ -89,7 +89,12 @@ class Args:
 
 @dataclass
 class SAMConfig:
-    spec_config: SpecConfig
+    # data
+    spect_config: SpectConfig
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
 
     debug: bool = False
     exp_name: Optional[str] = None
@@ -112,6 +117,32 @@ class SAMConfig:
     prompt_lr: float = 1e-5
     loss_fn: Literal["mse", "dice", "bce_logits"] = 'dice'
 
+
+@dataclass
+class TonalConfig:
+    spect_config: SpectConfig
+    root_dir: str = 'data/dclde'
+    
+    # range of signal to process
+    start_s: float = 0
+    end_s: float = np.inf
+
+    minlen_ms: int = 150
+    maxgap_ms: int = 50
+    maxslope_Hz_per_ms: int = 1000
+    activeset_s: float = 0.05
+
+    # peask selection
+    normalized: bool = False
+    thre_norm: float = 0.5
+    thre: float = 9.8
+    select_method:Literal["simple", "simpleN"] = 'simple'
+    peak_dis: int = 2
+    minlen_s: float = minlen_ms/1000
+    maxgap_s: float = maxgap_ms/1000
+
+
+    disambiguate_s: float = 0.3
 
 if __name__ == '__main__':
     args = tyro.cli(SAMConfig)
