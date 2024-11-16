@@ -314,7 +314,7 @@ if __name__ == "__main__":
     if args.eval_single:
 
         if args.model == 'sam':
-            cfg = tyro.cli(config.SAMConfig, args=remaining)
+            cfg = tyro.cli(config.Config, args=remaining)
             evaluate_sam(cfg, visualize_eval=args.visual, visualize_name=args.visual_name)
         # if args.model == 'sam':
         #     precision, recall, thresholds= evaluate_sam(args)

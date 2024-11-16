@@ -33,7 +33,7 @@ def load_annotation(bin_file)-> list[np.ndarray]:
         print(f'{bin_file} has {len(annos)} annotated whistles')
         return annos  #[(time(s), frequency(Hz)),...]
 
-def anno_to_spec_point(anno, height = 769, hop_ms = 2, freq_bin = 125):
+def anno_to_spect_point(anno, height = 769, hop_ms = 2, freq_bin = 125):
     """Convert annotation to spectrogram point
     
     Args:
@@ -85,5 +85,5 @@ if __name__ == "__main__":
     annos = load_annotation(sample_bin)
     print(annos[0].shape, len(annos), annos[0].dtype)
     print(np.max([np.max(anno) for anno in annos]))
-    spec_anno = anno_to_spec_point(annos[0])
+    spec_anno = anno_to_spect_point(annos[0])
     print(spec_anno.shape, spec_anno[:, 1].max(), spec_anno[:, 1].min())

@@ -1,0 +1,347 @@
+from collections import deque
+import numpy as np
+from pathlib import Path
+from scipy.interpolate import interp1d
+import tyro
+
+from sam_whistle.evaluate.tonal_extraction import tfTreeSet, ActiveSet
+from sam_whistle.config import TonalConfig
+from sam_whistle import utils
+from functools import partial
+
+
+
+class TonalTracker:
+    """Extract tonal from one wav file by graph search algorithm."""
+    def __init__(self, cfg: TonalConfig, stem:str):
+        self.cfg = cfg
+        # spectrogram parameters
+        self.spect_cfg = self.cfg.spect_cfg
+        self.offset_Hz = int(self.spect_cfg.crop) * self.spect_cfg.min_freq
+        self.freq_bin = self.spect_cfg.freq_bin
+        # spectrogram and GT tonals
+        self.audio_dir = Path(cfg.root_dir) / 'audio'
+        self.anno_dir = Path(cfg.root_dir) / 'annotation'
+        self.hop_s = self.spect_cfg.hop_ms / 1000
+        self.spect_map = self._load_spectrogram(stem)
+        self.gt_tonals = self._load_gt_tonals(stem)
+        self.H, self.W = self.spect_map.shape[-2:]
+        # search parameters
+        self.pre_peak_num = 0.25 * self.H
+        self.maxslope_Hz_per_ms = self.cfg.maxslope_Hz_per_ms
+        self.activeset_s = self.cfg.activeset_s
+        self.minlen_s = self.cfg.minlen_s
+        self.maxgap_s = self.cfg.maxgap_s
+        # initialize
+        self.current_win_idx = 0
+        self.start_s = self.cfg.start_s
+        self.current_s = self.cfg.start_s
+        self.current_peaks = []
+        self.current_peaks_freq = []
+        if self.cfg.use_conf:
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.cfg.thre_norm)
+        else:
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.cfg.thre)
+        self.active_set = ActiveSet()
+        self.active_set.setResolutionHz(self.freq_bin)
+        self.detected_tonals = None
+
+        # compare tonals
+        self.search_row = self.cfg.peak_tolerance_Hz // self.freq_bin
+
+    
+    def _load_spectrogram(self, stem: str):
+        """Load original spectrogram from wave file, used for graph search baseline with"""
+        audio_file = self.audio_dir / f'{stem}.wav'
+        waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
+        wave_len_s = waveform.shape[-1] / sample_rate
+
+        start_s = max(0, self.cfg.start_s)
+        end_s = min(self.cfg.end_s, wave_len_s)
+        start_idx = int(start_s * sample_rate)
+        end_idx = int(end_s * sample_rate)
+        waveform = waveform[:, start_idx:end_idx]
+        
+        # to match the marie's implementation, set the center to False
+        spect_power_db= utils.wave_to_spect(waveform, sample_rate, center = True, **vars(self.cfg.spect_cfg))
+        spect_power_db = spect_power_db[0].numpy() # (freq, time)
+        if self.cfg.spect_cfg.crop:
+            spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
+        
+        H, W = spect_power_db.shape[-2:]
+        if not self.cfg.use_conf:
+            block_size = self.cfg.spect_cfg.block_size
+            for i in range(0, W, block_size):
+                spect_power_db[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, H * self.cfg.broadband)
+        print(f'Loaded spectrogram from {stem}: {spect_power_db.shape}')
+        return spect_power_db
+
+    def _load_gt_tonals(self, stem: str):
+        """Load ground truth tonals from annotation file."""
+        bin_file = self.anno_dir/ f'{stem}.bin'
+        gt_tonals = utils.load_annotation(bin_file)
+        return gt_tonals
+
+
+    def _select_peaks(self, spectrum, method='simple', thre = 0.5):
+        """Detect peaks based on SNR and other criteria, handling broadband signals separately.
+        
+        Args:
+            spectrum: (H,) spectrum to analyze
+                frequency of spectrum must increase from top to bottom
+            method: 'simple' or 'simpleN' for peak detection
+            thre: SNR threshold for peak detection.
+                default 0.5 followed Pu Li if spectrum is normalized
+                default 9.8 followed Marie Roch if spectrum is not normalized
+        """
+
+        if method == 'simple':
+            peaks, _ = utils.find_peaks_simple(spectrum)
+        elif method == 'simpleN':
+            peaks, _ = utils.find_peaks_simpleN(spectrum)
+        peaks = [p for p in peaks if spectrum[p] >= thre]
+        peaks = utils.consolidate_peaks(peaks, spectrum, min_gap=self.cfg.peak_dis)
+        peak_num = len(peaks)
+        if peak_num > 0:
+            increase = (peak_num - self.pre_peak_num) / self.H
+            if increase > self.cfg.broadband:
+                pass
+            else:
+                self.current_peaks = peaks
+                self.current_peaks_freq = peaks * self.freq_bin + self.offset_Hz
+                self.pre_peak_num = peak_num
+                return True
+        
+        return False            
+
+
+    def _prune_and_extend(self):
+        peaks = self.current_peaks
+        assert len(peaks) > 0, "No peaks to prune and extend"
+
+        self.active_set.prune(self.current_s, self.minlen_s, self.maxgap_s)
+        times = np.ones_like(peaks) * self.current_s
+        freqs = self.current_peaks_freq
+        dbs = self.spect_map[:, self.current_win_idx]
+        phases = np.zeros_like(peaks)
+        ridges = np.zeros_like(peaks)
+        peak_list = tfTreeSet(times, freqs, dbs, phases, ridges)
+        self.active_set.extend(peak_list, self.maxslope_Hz_per_ms, self.activeset_s)
+    
+
+    def build_graph(self):
+        while self.current_win_idx < self.W:
+            found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx])
+            if found_peaks:
+                self._prune_and_extend()
+            self.current_win_idx += 1
+            self.current_s += self.hop_s
+        # final prune
+        self.active_set.prune(self.current_s + 2*self.maxgap_s,self.minlen_s, self.maxgap_s)
+
+
+    def get_tonals(self):
+        """Process and filter tonal signals based on given parameters.
+        """
+        tonals = []
+        self.discarded_count = 0
+
+        def tone_py(tone):
+            res = []
+            for t in tone:
+                res.append([t.time, t.freq])
+            return np.array(res)
+        
+        def stat_avg_nth_wait_times(tonal, n: int):
+            """
+            Calculate the average wait time between samples separated by n positions.
+            """
+            # Get time samples
+            times = np.array(tonal.get_time())
+            samples = times / 0.002
+            loop_end = len(samples) - n
+            if loop_end <= 0:
+                raise ValueError("n is too large for the number of samples")
+            
+            wait_times = samples[n:] - samples[:-n]
+            avg_wait_time = np.mean(wait_times)
+            return avg_wait_time
+
+        for subgraph in self.active_set.getResultGraphs():
+            # Disambiguate the subgraph
+            graph = subgraph.disambiguate(
+                self.cfg.disambiguate_s,
+                self.freq_bin,
+                False,
+                False
+            )
+            edges = graph.topological_sort()
+            for edge in edges:
+                tone = edge.content
+                if tone.get_duration() > self.minlen_s:
+                    if stat_avg_nth_wait_times(tone, 3) < 18:
+                        tonals.append(tone_py(tone))
+                else:
+                    self.discarded_count += 1
+
+        self.detected_tonals = tonals
+        print(f'Detected {len(tonals)} tonals, discarded {self.discarded_count} tonals')
+        return tonals
+
+    def compare_tonals(self):
+        """Compare extracted tonals with ground truth tonals."""
+        assert self.detected_tonals is not None, "No detected tonals to compare."
+        # GT tonals
+        gt_tonals = self.gt_tonals
+        gt_num = len(gt_tonals)
+        gt_ranges = np.zeros((gt_num, 2))
+        gt_durations = np.zeros(gt_num)
+        # Detected tonals
+        dt_tonals = self.detected_tonals
+        dt_num = len(dt_tonals)
+        dt_ranges = np.zeros((dt_num, 2))
+        dt_durations = np.zeros(dt_num)
+
+        spect_end_s = self.W * self.hop_s
+        for gt_idx, gt_tonal in enumerate(gt_tonals):
+            tonal_start_s = gt_tonal[:, 0].min()
+            tonal_end_s =  min(gt_tonal[:, 0].max(), spect_end_s)
+            gt_ranges[gt_idx] = (tonal_start_s, tonal_end_s)
+            gt_durations[gt_idx] = tonal_end_s - tonal_start_s
+
+        for dt_idx, dt_tonal in enumerate(dt_tonals):
+            dt_start_s = dt_tonal[:, 0].min()
+            dt_end_s = dt_tonal[:, 0].max()
+            dt_ranges[dt_idx] = (dt_start_s, dt_end_s)
+            dt_durations[dt_idx] = dt_end_s - dt_start_s
+
+
+        dt_false_pos_all = list(range(dt_num))
+        dt_true_pos_all = []
+        dt_true_pos_valid = []
+        gt_matched_all = []
+        gt_matched_valid = []
+        gt_missed_all = []
+        gt_missed_valid = []
+        all_deviation = []
+        all_covered_s = []
+        all_excess_s = []
+        all_dura = []
+        for gt_idx in range(gt_num):
+            gt_tonal = gt_tonals[gt_idx]
+            gt_tonal = gt_tonal[np.argsort(gt_tonal[:, 0])]
+            gt_dura = gt_durations[gt_idx]
+            if gt_dura < self.hop_s:
+                # suspiciously short tonal
+                continue
+            
+            gt_start_s, gt_end_s = gt_ranges[gt_idx]   
+            gt_block_start = np.ceil((gt_start_s - self.start_s) /self.hop_s).astype(int) # ceil
+            gt_block_end = np.floor((gt_end_s - self.start_s) / self.hop_s).astype(int) + 1# floor
+            gt_block = self.spect_map[:, gt_block_start: gt_block_end]
+
+            gt_block_ts = self.start_s + np.arange(gt_block_start, gt_block_end) * self.hop_s
+            gt_t, gt_f = gt_tonal[:, 0], gt_tonal[:, 1]
+            gt_t_unique_idx = np.unique(gt_t, return_index=True)[1]
+            gt_t = gt_t[gt_t_unique_idx]
+            gt_f = gt_f[gt_t_unique_idx]
+            gt_f_interp_fn = interp1d(gt_t, gt_f, fill_value="extrapolate")
+            gt_f_interp = gt_f_interp_fn(gt_block_ts)
+            # serach neighborhood
+            gt_row = np.rint(gt_f_interp / self.freq_bin).astype(int) - self.spect_cfg.crop_bottom # + 1
+            search_row_low = np.minimum(np.maximum(gt_row - self.search_row, 0), self.H)
+            search_row_high = np.maximum(np.minimum(gt_row + self.search_row, self.H), 0)
+            assert len(search_row_low) == len(search_row_high) == gt_block.shape[-1]
+            spect_search = [np.max(gt_block[l:h, i]).item() for i, (l,h)in enumerate(zip(search_row_low, search_row_high))] 
+            sorted_search_snr = np.sort(spect_search)
+            bound_idx = max(0, round(len(sorted_search_snr) * (1- self.cfg.ratio_above_snr)))
+            gt_snr = sorted_search_snr[bound_idx]
+            valid = (gt_snr > self.cfg.snr_db) & (gt_dura >= self.minlen_s)
+            # overlap with detected tonals
+            overlapped_idx = utils.get_overlapped_tonals((gt_start_s, gt_end_s), dt_ranges)
+            covered_s = 0
+            excess_s = 0
+            deviations = []
+            matched = False
+            for ov_idx in overlapped_idx:
+                dt_tonal = dt_tonals[ov_idx]
+                dt_t, dt_f = dt_tonal[:, 0], dt_tonal[:, 1]
+                dt_ov_idx = np.nonzero((dt_t >= gt_start_s) & (dt_t <= gt_end_s))[0]
+                dt_ov_t = dt_t[dt_ov_idx]
+                dt_ov_f = dt_f[dt_ov_idx]
+                gt_ov_f_interp = gt_f_interp_fn(dt_ov_t)
+                deviation = np.abs(gt_ov_f_interp - dt_ov_f)
+
+                if np.mean(deviation) <= self.cfg.match_tolerance_Hz:
+                    matched = True
+                    if ov_idx in dt_false_pos_all:
+                        dt_false_pos_all.remove(ov_idx)
+                    dt_true_pos_all.append(ov_idx)
+                    if valid:
+                        dt_true_pos_valid.append(ov_idx)
+
+                    deviations.extend(deviation)
+                    covered_s += dt_ov_t[-1] - dt_ov_t[0]
+                    excess_s += max(0, gt_t[0] - dt_t[0]) + max(0, dt_t[-1] - gt_t[-1])
+
+            if matched:
+                gt_matched_all.append(gt_idx)
+                if valid:
+                    gt_matched_valid.append(gt_idx)
+            else:
+                gt_missed_all.append(gt_idx)
+                if valid:
+                    gt_missed_valid.append(gt_idx)
+            if matched:
+                gt_deviation = np.mean(deviations) 
+                all_deviation.append(gt_deviation) 
+                all_covered_s.append(covered_s)
+                all_dura.append(gt_dura)
+                all_excess_s.append(excess_s)
+                print(f'gt_idx: {gt_idx}, covered_s: {covered_s}, excess_s: {excess_s}, deviations: {gt_deviation}')
+        
+        res = {
+            # dt
+            'dt_false_pos_all': dt_false_pos_all,
+            'dt_true_pos_all': dt_true_pos_all,
+            'dt_true_pos_valid': dt_true_pos_valid,
+            # gt
+            'gt_matched_all': gt_matched_all,
+            'gt_matched_valid': gt_matched_valid,
+            'gt_missed_all': gt_missed_all,
+            'gt_missed_valid': gt_missed_valid,
+            #
+            'all_deviation': all_deviation,
+            'all_covered_s': all_covered_s,
+            'all_excess_s': all_excess_s,
+            'all_dura': all_dura
+
+        }
+        return res
+
+if __name__ == "__main__":
+    stem = 'Qx-Dd-SCI0608-N1-060814-150255' # 5 tonals
+    # stem = 'Qx-Dd-SCI0608-N1-060816-142812' # 213 tonals
+    # stem = 'Qx-Dc-SC03-TAT09-060516-173000'
+    stem = 'Qx-Tt-SCI0608-Ziph-060819-074737'
+    cfg = tyro.cli(TonalConfig)
+    tracker = TonalTracker(cfg, stem)
+    tracker.build_graph()
+    tonals = tracker.get_tonals()
+    res = tracker.compare_tonals()
+    for k, v in res.items():
+        print(f'{k}: {len(v)}')
+
+    precision_valid = len(res['dt_true_pos_valid']) / (len(res['dt_true_pos_valid']) + len(res['dt_false_pos_all']))
+    gt_N = (len(res['gt_matched_valid']) + len(res['gt_missed_valid']))
+    recall_valid = len(res['gt_matched_valid']) / gt_N
+    dev_mean = np.mean(res['all_deviation'])
+    dev_std = np.std(res['all_deviation'])
+    coverage = np.array(res['all_covered_s']) / np.array(res['all_dura'])
+    coverage_mean = np.mean(coverage)
+    coverage_std = np.std(coverage)
+    frag = len(res['dt_true_pos_valid']) / len(res['gt_matched_valid'])
+
+
+    print(f'GT: {gt_N}, Precision: {precision_valid}, Recall: {recall_valid}', f'Deviation: {dev_mean} +/- {dev_std}', f'Coverage: {coverage_mean} +/- {coverage_std}', f'Frag: {frag}')
+

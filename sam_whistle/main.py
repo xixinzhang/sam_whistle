@@ -16,10 +16,10 @@ from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_
 from sam_whistle.model.fcn_patch import weights_init_He_normal
 from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
 from sam_whistle import config
-from sam_whistle.evaluate.evaluate import evaluate_sam_prediction
+from sam_whistle.evaluate.eval_conf import evaluate_sam_prediction
 from sam_whistle.utils.visualize import visualize_array
 
-def run_sam(args: config.SAMConfig):
+def run_sam(cfg: config.SAMConfig):
     # Set seed
     # torch.manual_seed(0)
     # torch.cuda.manual_seed(0)
@@ -28,50 +28,50 @@ def run_sam(args: config.SAMConfig):
 
     # Set up logging
     timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-    if args.exp_name is not None:
-        args.log_dir = os.path.join(args.log_dir, str(timestamp)+"-"+args.exp_name)
+    if cfg.exp_name is not None:
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp)+"-"+cfg.exp_name)
     else:
-        args.log_dir = os.path.join(args.log_dir, str(timestamp))
-    if not os.path.exists(args.log_dir):
-        os.makedirs(args.log_dir)
-    with open(os.path.join(args.log_dir, 'args.json'), 'w') as f:
-        json.dump(asdict(args), f, indent=4)
-    writer = SummaryWriter(args.log_dir)
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp))
+    if not os.path.exists(cfg.log_dir):
+        os.makedirs(cfg.log_dir)
+    with open(os.path.join(cfg.log_dir, 'args.json'), 'w') as f:
+        json.dump(asdict(cfg), f, indent=4)
+    writer = SummaryWriter(cfg.log_dir)
     # Load model
-    model = SAM_whistle(args)
-    model.to(args.device)
+    model = SAM_whistle(cfg)
+    model.to(cfg.device)
     # optimizer
-    if args.loss_fn == "mse":
+    if cfg.loss_fn == "mse":
         loss_fn = nn.MSELoss()
-    elif args.loss_fn == "dice":
+    elif cfg.loss_fn == "dice":
         loss_fn = DiceLoss()
-    elif args.loss_fn == "bce_logits":
+    elif cfg.loss_fn == "bce_logits":
         loss_fn = torch.nn.BCEWithLogitsLoss()
-    if not args.freeze_img_encoder:
-        encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=args.encoder_lr)
-    if not args.freeze_mask_decoder:
-        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=args.decoder_lr)
-    if not args.freeze_prompt_encoder:
-        prompt_optimizer = optim.AdamW(model.sam_model.prompt_encoder.parameters(), lr=args.prompt_lr)
+    if not cfg.freeze_img_encoder:
+        encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=cfg.encoder_lr)
+    if not cfg.freeze_mask_decoder:
+        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=cfg.decoder_lr)
+    if not cfg.freeze_prompt_encoder:
+        prompt_optimizer = optim.AdamW(model.sam_model.prompt_encoder.parameters(), lr=cfg.prompt_lr)
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
-    trainloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, collate_fn= custom_collate_fn)
-    testset = WhistleDataset(args, 'test',model.sam_model.image_encoder.img_size)
-    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=args.num_workers, collate_fn= custom_collate_fn)
+    trainset = WhistleDataset(cfg, 'train', model.sam_model.image_encoder.img_size)
+    trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
+    testset = WhistleDataset(cfg, 'test',model.sam_model.image_encoder.img_size)
+    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
 
     min_test_loss = torch.inf
-    pbar = tqdm(range(args.epochs))
+    pbar = tqdm(range(cfg.epochs))
     for epoch in pbar:
         # Train model
         batch_losses = []
         model.train()
         for i, data in enumerate(trainloader):
             spect, gt_mask = data['spect'], data['gt_mask']
-            spect = spect.to(args.device)
-            gt_mask = gt_mask.to(args.device)
+            spect = spect.to(cfg.device)
+            gt_mask = gt_mask.to(cfg.device)
 
             pred_mask = model(spect)
             batch_loss = loss_fn(pred_mask, gt_mask)
@@ -92,7 +92,7 @@ def run_sam(args: config.SAMConfig):
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model
-        test_loss= evaluate_sam_prediction(model, testloader, writer, epoch, args, loss_fn)
+        test_loss= evaluate_sam_prediction(model, testloader, writer, epoch, cfg, loss_fn)
         writer.add_scalar('Loss/test', test_loss, epoch)
         # grid = vutils.make_grid(torch.cat([pred_mask, gt_mask], dim=0), nrow=2,  padding=2)
         # writer.add_image('Mask/pred_gt', grid, epoch)
@@ -101,15 +101,15 @@ def run_sam(args: config.SAMConfig):
         if test_loss < min_test_loss:
             print(f"Saving best model with test loss {test_loss} at epoch {epoch}")
             min_test_loss = test_loss
-            if not args.freeze_img_encoder:
-                torch.save(model.img_encoder.state_dict(), os.path.join(args.log_dir, 'img_encoder.pth'))
-            if not args.freeze_mask_decoder:
-                torch.save(model.decoder.state_dict(), os.path.join(args.log_dir, 'decoder.pth'))
-            if not args.freeze_prompt_encoder:
-                torch.save(model.sam_model.prompt_encoder.state_dict(), os.path.join(args.log_dir, 'prompt_encoder.pth'))
+            if not cfg.freeze_img_encoder:
+                torch.save(model.img_encoder.state_dict(), os.path.join(cfg.log_dir, 'img_encoder.pth'))
+            if not cfg.freeze_mask_decoder:
+                torch.save(model.decoder.state_dict(), os.path.join(cfg.log_dir, 'decoder.pth'))
+            if not cfg.freeze_prompt_encoder:
+                torch.save(model.sam_model.prompt_encoder.state_dict(), os.path.join(cfg.log_dir, 'prompt_encoder.pth'))
         writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
-def run_pu(args: config.SAMConfig):
+def run_pu(args: config.SpectConfig):
     """replicate Pu's work, fcn on balanced patches"""
      # Set seed
     # torch.manual_seed(0)
@@ -200,7 +200,7 @@ def run_pu(args: config.SAMConfig):
                 torch.save(model.state_dict(), os.path.join(args.log_dir, 'model.pth'))
 
 
-def run_fcn_spect(args: config.SAMConfig):
+def run_fcn_spect(args: config.SpectConfig):
     """Apply FCN directly to spectrograms(imbalanced patches)"""
 
     timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
@@ -285,7 +285,7 @@ def run_fcn_spect(args: config.SAMConfig):
             torch.save(model.state_dict(), os.path.join(args.log_dir, 'model.pth'))
 
 
-def run_fcn_encoder(args: config.SAMConfig):
+def run_fcn_encoder(args: config.SpectConfig):
     """Apply pretrained FCN as encoder kernel to spectrograms(imbalanced patches), followed by a decoder"""
     timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
     if args.exp_name is not None:

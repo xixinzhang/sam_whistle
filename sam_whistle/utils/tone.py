@@ -52,6 +52,16 @@ def consolidate_peaks(peaks, spectrum, min_gap = 2):
 
     return peaks
 
+
+def get_overlapped_tonals(gt_range, dt_ranges):
+    """Get overlapped tonals between ground truth and detected tonals."""
+    gt_start, gt_end = gt_range
+    dt_start_times, dt_end_times = dt_ranges[:, 0], dt_ranges[:, 1]
+    overlaped_cond = (dt_start_times <= gt_start) & (dt_end_times >= gt_start) | \
+                    (dt_start_times >= gt_start) & (dt_start_times<= gt_end)
+    overlaped_idx = np.nonzero(overlaped_cond)[0]
+    return overlaped_idx
+
 if __name__ == "__main__":
     peaks = find_peaks_simple(np.ones(10))
     print(len(peaks[0]))

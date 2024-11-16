@@ -32,7 +32,7 @@ def custom_collate_fn(batch):
 class WhistleDataset(Dataset):
     def __init__(self, cfg: config.SAMConfig, split='train', img_size=1024, spec_nchan=3):
         self.cfg = cfg
-        self.spect_cfg = cfg.spect_config
+        self.spect_cfg = cfg.spect_cfg
         self.debug = cfg.debug
         
         self.split = split
@@ -151,7 +151,7 @@ class WhistleDataset(Dataset):
 
         spec_annos = []
         for anno in tqdm(annos):
-            spec_anno = utils.anno_to_spec_point(anno, height, self.spect_cfg.hop_ms, self.spect_cfg.freq_bin)
+            spec_anno = utils.anno_to_spect_point(anno, height, self.spect_cfg.hop_ms, self.spect_cfg.freq_bin)
             spec_annos.append(spec_anno)
 
         # save spec and annotation
@@ -511,13 +511,13 @@ def check_spec_dataset(cfg:config.SAMConfig):
 def check_spec_block(cfg:config.SAMConfig, spec_idx, start, split = 'train', ):
     data_set = WhistleDataset(cfg, split)
     check_block = data_set.data[spec_idx]
-    spect = check_block['spect'][..., start:start+ cfg.spect_config.block_size]
-    mask = check_block['mask'][..., start:start+ cfg.spect_config.block_size]
+    spect = check_block['spect'][..., start:start+ cfg.spect_cfg.block_size]
+    mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
     utils.visualize_array(spect, cmap='magma')
     utils.visualize_array(mask, cmap='gray')
 
 if __name__ == "__main__":
-    cfg = tyro.cli(config.SAMConfig)
+    cfg = tyro.cli(config.Config)
     check_spec_dataset(cfg)
     # check_spec_block(0, 21000, 'test')
 

@@ -17,7 +17,7 @@ def load_wave_file(file_path, type='tensor'):
         waveform, sample_rate = torchaudio.load(file_path)
     return waveform, sample_rate
 
-def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0, n_fft=None, hop_length=None, top_db=80.0, **kwargs):
+def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0, n_fft=None, hop_length=None, top_db=80.0, center = True, **kwargs):
     """Convert waveform to raw spectrogram in power dB scale."""
     # fft params
     if n_fft is None:
@@ -41,7 +41,7 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
         win_length=n_fft,
         power=2.0,
         normalized=False,
-        center=True,
+        center=center,
         pad_mode='reflect',
         onesided=True,
     )
@@ -65,6 +65,9 @@ def snr_spect(spect_db, click_thr_db, broadband_thr_n):
     click_p = np.sum((spect_db - meanf_db) > click_thr_db, axis=0) > broadband_thr_n
     use_p = ~click_p
     spect_db = medfilt2d(spect_db, kernel_size=[3,3])
+    if np.sum(use_p) == 0:
+        # Qx-Dc-SC03-TAT09-060516-173000.wav 4500 no use_p
+        use_p = np.ones_like(click_p)
     meanf_db = np.mean(spect_db[:, use_p], axis=1, keepdims=True)
     snr_spect_db = spect_db - meanf_db
     return snr_spect_db
