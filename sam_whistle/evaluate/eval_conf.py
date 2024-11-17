@@ -34,7 +34,7 @@ class EvalResults:
 @torch.no_grad()
 def evaluate_sam_prediction(cfg: config.SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
     if load:
-        model = SAM_whistle(cfg,)
+        model = SAM_whistle(cfg)
         model.to(cfg.device)
         # Load model weights
         if not cfg.freeze_img_encoder:
@@ -314,7 +314,7 @@ if __name__ == "__main__":
     if args.eval_single:
 
         if args.model == 'sam':
-            cfg = tyro.cli(config.Config, args=remaining)
+            cfg = tyro.cli(config.SAMConfig, args=remaining)
             evaluate_sam(cfg, visualize_eval=args.visual, visualize_name=args.visual_name)
         # if args.model == 'sam':
         #     precision, recall, thresholds= evaluate_sam(args)

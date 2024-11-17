@@ -53,13 +53,6 @@ def normalize_spect(spect_db):
     spect_db = (spect_db - spect_db.min()) / (spect_db.max() - spect_db.min())  # normalize to [0, 1]
     return spect_db
 
-def flip_and_normalize_spect(spect_db):
-    # flip spectrogram origin to bottom left
-    spect_db = torch.flip(spect_db, [-2])
-    # normalzed spectrogram
-    spect_db = normalize_spect(spect_db)
-    return spect_db
-
 def snr_spect(spect_db, click_thr_db, broadband_thr_n):
     meanf_db = np.mean(spect_db, axis=1, keepdims=True)
     click_p = np.sum((spect_db - meanf_db) > click_thr_db, axis=0) > broadband_thr_n

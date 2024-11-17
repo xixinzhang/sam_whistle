@@ -5,10 +5,11 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 import torch
+plt.switch_backend('agg')
 
 def show_spect(spect:np.array, fig, save:str = None):
     ax = fig.gca()
-    ax.imshow(spect[::-1], origin='lower',cmap='viridis')
+    ax.imshow(spect, cmap='viridis')
     ax.axis('on')
     y_ticks = np.linspace(0, spect.shape[0] - 1, num=10)
     y_labels = np.round(np.linspace(5, 50, num=10), 2)
@@ -47,14 +48,13 @@ def show_mask(mask, ax, random_color=False):
         color = np.array([255/255, 0/255, 102/255, 1])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image[::-1], origin='lower',cmap='viridis')
+    ax.imshow(mask_image,cmap='viridis')
 
 def visualize(spect, masks,pred_mask, save_path=None, idx=None):
     spect = spect.squeeze().cpu().numpy()
     masks = masks.squeeze().cpu().numpy()
     pred_mask = pred_mask.squeeze().cpu().numpy()
     width, height = spect.shape[:2][::-1]
-
 
     fig, axs = plt.subplots(figsize=(width/100, height/100))
     show_spect(spect, fig)
@@ -135,9 +135,6 @@ def toggle_visual(image_sets):
 
     # Show the plot
     plt.show()
-
-
-
 
 
 FLOAT_TYPE = [np.float32, np.float64]
@@ -231,6 +228,7 @@ def visualize_array(
             mask = mask.squeeze()
         assert mask.shape[:2] == array.shape[:2], "Mask shape must match image shape"
         colored_mask = np.zeros((height, width, 4), dtype=np.float32)
+        assert mask.dtype in INT_TYPE, "Mask must be an integer array"
         unique_classes = np.unique(mask)
         if len(unique_classes) ==2:
             color = np.random.rand(3,)  if random_colors else np.array(mask_color) / 255

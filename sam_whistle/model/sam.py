@@ -8,9 +8,7 @@ from torch.nn.functional import normalize, threshold, interpolate
 
 
 from sam_whistle import config
-from sam_whistle import utils
 from sam_whistle.utils.visualize import visualize_array
-from sam_whistle.model.loss import DiceLoss
 
 from segment_anything import sam_model_registry, SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
@@ -28,19 +26,19 @@ def weights_init(m):
             nn.init.zeros_(m.bias)
 
 class SAM_whistle(nn.Module):
-    def __init__(self, args: config.SAMConfig):
+    def __init__(self, cfg: config.SAMConfig):
         super().__init__()
-        self.device = args.device
-        self.args = args
-        checkpoint = self.get_checkpoint(self.args.model_type)
-        self.sam_model = sam_model_registry[self.args.model_type](checkpoint=checkpoint)
+        self.device = cfg.device
+        self.cfg = cfg
+        checkpoint = self.get_checkpoint(self.cfg.model_type)
+        self.sam_model = sam_model_registry[self.cfg.model_type](checkpoint=checkpoint)
 
         self.transform= ResizeLongestSide(self.sam_model.image_encoder.img_size)
         self.img_encoder = self.sam_model.image_encoder
         self.prompt_encoder = self.sam_model.prompt_encoder
 
         # naive decoder
-        if self.args.sam_decoder:
+        if self.cfg.sam_decoder:
             self.decoder = self.sam_model.mask_decoder
         else:
             encoder_output_dim = 256 # sam
@@ -56,31 +54,30 @@ class SAM_whistle(nn.Module):
                     nn.ConvTranspose2d(32, 1, kernel_size=2, stride=2),
                 )
 
-        if self.args.freeze_img_encoder:
+        if self.cfg.freeze_img_encoder:
             for param in self.img_encoder.parameters():
                 param.requires_grad = False
-        if self.args.freeze_mask_decoder:
+        if self.cfg.freeze_mask_decoder:
             for param in self.decoder.parameters():
                 param.requires_grad = False
-        if self.args.freeze_prompt_encoder: 
+        if self.cfg.freeze_prompt_encoder: 
             for param in self.prompt_encoder.parameters():
                 param.requires_grad = False
-
  
     
     def get_checkpoint(self, model_type):
         if model_type == "vit_b":
-            checkpoint = os.path.join(self.args.ckpt_dir, "sam_vit_b_01ec64.pth")
+            checkpoint = os.path.join(self.cfg.ckpt_dir, "sam_vit_b_01ec64.pth")
         elif model_type == "vit_l":
-            checkpoint = os.path.join(self.args.ckpt_dir, "sam_vit_l_0b3195.pth")
+            checkpoint = os.path.join(self.cfg.ckpt_dir, "sam_vit_l_0b3195.pth")
         elif model_type == "vit_h":
-            checkpoint = os.path.join(self.args.ckpt_dir, "sam_vit_h_4b8939.pth")
+            checkpoint = os.path.join(self.cfg.ckpt_dir, "sam_vit_h_4b8939.pth")
         else:
             raise ValueError("Model type error!")
         return checkpoint
 
     def forward(self, spect):
-        if self.args.use_prompt:
+        if self.cfg.use_prompt:
             spect, gt_mask, points= spect  # BhWC, BHW, (BN2,BN)
             coords, labels = points
             coords = self.transform.apply_coords_torch(coords, spect.shape[-2:])
@@ -98,7 +95,7 @@ class SAM_whistle(nn.Module):
         
         spect_embedding = self.sam_model.image_encoder(input_spect)  # (B, 256, 64, 64)
 
-        if self.args.sam_decoder:
+        if self.cfg.sam_decoder:
             low_res_masks, iou_predictions = self.sam_model.mask_decoder(
                 image_embeddings=spect_embedding,
                 image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
@@ -123,7 +120,6 @@ class SAM_whistle(nn.Module):
             upscaled_masks = torch.sigmoid(mask_logits)
 
         pred_mask = upscaled_masks
-
         return pred_mask
 
 

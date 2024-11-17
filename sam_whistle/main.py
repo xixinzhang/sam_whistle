@@ -92,11 +92,10 @@ def run_sam(cfg: config.SAMConfig):
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model
-        test_loss= evaluate_sam_prediction(model, testloader, writer, epoch, cfg, loss_fn)
+        test_loss= evaluate_sam_prediction(cfg, False, model, testloader, loss_fn)
         writer.add_scalar('Loss/test', test_loss, epoch)
         # grid = vutils.make_grid(torch.cat([pred_mask, gt_mask], dim=0), nrow=2,  padding=2)
         # writer.add_image('Mask/pred_gt', grid, epoch)
-        print(f"Test Loss: {test_loss}")
 
         if test_loss < min_test_loss:
             print(f"Saving best model with test loss {test_loss} at epoch {epoch}")

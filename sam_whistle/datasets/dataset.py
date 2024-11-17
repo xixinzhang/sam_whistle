@@ -44,6 +44,7 @@ class WhistleDataset(Dataset):
         self.meta = self._get_dataset_meta()
         self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
 
+        self.interp = self.spect_cfg.interp
         self.spec_nchan = spec_nchan
         self.transform = ResizeLongestSide(img_size)
 
@@ -54,25 +55,24 @@ class WhistleDataset(Dataset):
             for stem in self.meta:
                 if not (self.processed_dir / f'{split}/{stem}/spec.pt').exists():
                     raise FileNotFoundError(f'{stem}.wav not found in split: {split}')
-                if not (self.processed_dir / f'{split}/{stem}/anno.pkl').exists():
+                if not (self.processed_dir / f'{split}/{stem}/mask.npy').exists():
                     raise FileNotFoundError(f'{stem}.bin not found in split: {split}')
         
-        self.spec_lens = []
-        self.interp = self.spect_cfg.interp
-        self.data = self._annotation_to_mask()
-        self.spec_prob = [l/ sum(self.spec_lens) for l in self.spec_lens]
+        self.spect_lens = []
+        self.data = self._get_data()
+        self.spec_prob = [l/ sum(self.spect_lens) for l in self.spect_lens]
 
         if split == 'test':
             self.test_blocks = []
             for i, stem in enumerate(self.meta):
-                n_blocks = self.spec_lens[i] // self.spect_cfg.block_size
+                n_blocks = self.spect_lens[i] // self.spect_cfg.block_size
                 slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
                 self.test_blocks.extend(slices)
         
         if split == 'train':
             self.train_blocks = []
             for i, stem in enumerate(self.meta):
-                n_blocks = self.spec_lens[i] // self.spect_cfg.block_size
+                n_blocks = self.spect_lens[i] // self.spect_cfg.block_size
                 slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
                 self.train_blocks.extend(slices)
 
@@ -91,7 +91,7 @@ class WhistleDataset(Dataset):
         if self.split == 'train':
             if not self.debug and self.spect_cfg.block_multi > 1:
                 spect_idx = np.random.choice(len(self.data), p=self.spec_prob)
-                spec_len = self.spec_lens[spect_idx]
+                spec_len = self.spect_lens[spect_idx]
                 block_start = np.random.randint(0, spec_len - self.spect_cfg.block_size)
                 block_end = block_start + self.spect_cfg.block_size
                 block_slice = slice(block_start, block_end)
@@ -106,11 +106,6 @@ class WhistleDataset(Dataset):
         if self.spec_nchan == 3:
             spect = torch.cat([spect, spect, spect], axis=0) # [C, H, W]
 
-        # crop high and low freq
-        if self.spect_cfg.crop:
-            spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
-            gt_mask = gt_mask[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
-    
         data =  {
             "spect": spect, 
             "gt_mask": gt_mask,
@@ -123,7 +118,7 @@ class WhistleDataset(Dataset):
         if self.debug and not self.cfg.all_data:
             meta ={
                 'train':['palmyra092007FS192-071012-010614'],
-                'test':['palmyra092007FS192-070924-205730']
+                'test':['Qx-Dc-CC0411-TAT11-CH2-041114-154040-s']
             }
         else:
             meta = json.load(open(self.meta_file, 'r'))
@@ -143,17 +138,24 @@ class WhistleDataset(Dataset):
         waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
         spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg))
         print(f'\nLoaded spectrogram from {stem}, shape: {spec_power_db.shape},max: {spec_power_db.max():2f}, min: {spec_power_db.min():.2f}')
-        spec_power_db = utils.flip_and_normalize_spect(spec_power_db)
+        spec_power_db = torch.flip(spec_power_db, [-2])
 
         # annotations
-        height = spec_power_db.shape[-2]
+        shape = spec_power_db.shape[-2:]
         annos = utils.load_annotation(bin_file)
 
         spec_annos = []
         for anno in tqdm(annos):
-            spec_anno = utils.anno_to_spect_point(anno, height, self.spect_cfg.hop_ms, self.spect_cfg.freq_bin)
+            spec_anno = utils.anno_to_spect_point(anno, shape[-2], self.spect_cfg.hop_ms, self.spect_cfg.freq_bin)
             spec_annos.append(spec_anno)
-
+        
+        # filter out data w/o annotation
+        # target at data like palmyra092007FS192-070924-210000
+        x_bound = np.max([contour[:, 0].max() for contour in spec_annos])
+        x_bound = int(np.ceil(x_bound))
+        spec_power_db = spec_power_db[..., :x_bound]
+        gt_mask = self._get_gt_masks(shape, spec_annos, interp=self.interp)
+        
         # save spec and annotation
         if empty:
             path = self.processed_dir / f'{self.split}/{stem}'
@@ -161,27 +163,12 @@ class WhistleDataset(Dataset):
                 shutil.rmtree(path)
             path.mkdir(parents=True, exist_ok=True)
         torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
-        with open(self.processed_dir / f'{self.split}/{stem}/anno.pkl', 'wb') as f:
-            pickle.dump(spec_annos, f)
-        
+        np.save(self.processed_dir / f'{self.split}/{stem}/mask.npy', gt_mask)
 
-    def _load_processed_data(self, stem=None):
-        """load preprocessed data"""
-        spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt')
-        with open(self.processed_dir / f'{self.split}/{stem}/anno.pkl', 'rb') as f:
-            annos = pickle.load(f)
-        return  spect, annos
 
-    def _get_gt_masks(self, spect, contours, interp='linear'):
+    def _get_gt_masks(self, shape, contours, interp='linear'):
         """"Get binary mask from each contour"""
-        # filter out data w/o annotation
-        # target at data like palmyra092007FS192-070924-210000
-        x_bound = np.max([contour[:, 0].max() for contour in contours])
-        x_bound = int(np.ceil(x_bound))
-        spect = spect[..., :x_bound]
-        
         # extract mask from contours
-        shape = spect.shape[-2:] 
         mask= np.zeros(shape)
         for i, contour in enumerate(contours):
             x, y = contour[:, 0], contour[:, 1]
@@ -203,22 +190,28 @@ class WhistleDataset(Dataset):
 
             for y, x in zip(new_y, new_x):
                 mask[y, x] = 1
-        return spect, mask
+        return  mask
     
-    def _annotation_to_mask(self):
+    def _get_data(self):
         data = {}
-        for i, stem in enumerate(tqdm(self.meta, desc=f"Masking {self.split}'s annotations")):
-            spec, annos = self._load_processed_data(stem)
+        for i, stem in enumerate(self.meta):
+            spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt')
+            gt_mask = np.load(self.processed_dir / f'{self.split}/{stem}/mask.npy')
             # Get gt mask from annotation
             # Quaility of annotation varies and some annotation are missing
-            spec, gt_mask = self._get_gt_masks(spec, annos, interp=self.interp)
-            self.spec_lens.append(spec.shape[-1])
+            self.spect_lens.append(spect.shape[-1])
             if not self.spect_cfg.skeleton:
                 gt_mask = utils.dilate_mask(gt_mask)
                 pass
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
-            data[i] = {'spect':spec, 'mask':gt_mask}
+
+            spect = utils.normalize_spect(spect)
+            if self.spect_cfg.crop:
+                spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
+                gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
+                
+            data[i] = {'spect':spect, 'mask':gt_mask}
         return data
             
 
@@ -513,13 +506,13 @@ def check_spec_block(cfg:config.SAMConfig, spec_idx, start, split = 'train', ):
     check_block = data_set.data[spec_idx]
     spect = check_block['spect'][..., start:start+ cfg.spect_cfg.block_size]
     mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
-    utils.visualize_array(spect, cmap='magma')
+    utils.visualize_array(spect, cmap='bone')
     utils.visualize_array(mask, cmap='gray')
 
 if __name__ == "__main__":
-    cfg = tyro.cli(config.Config)
-    check_spec_dataset(cfg)
-    # check_spec_block(0, 21000, 'test')
+    cfg = tyro.cli(config.SAMConfig)
+    # check_spec_dataset(cfg)
+    check_spec_block(cfg, 0, 0, 'test')
 
     # WhistlePatch
     # train_set = WhistlePatch(args, 'train')

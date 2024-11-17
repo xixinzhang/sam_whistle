@@ -13,7 +13,7 @@ class SpectConfig:
     freq_bin: int = 1000 // frame_ms
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
-    top_db: Optional[None] = 80
+    top_db: Optional[None] = None
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -121,6 +121,7 @@ class TonalConfig:
     meta_file: str = 'meta.json'
     start_s: float = 0
     end_s: float = np.inf
+    debug: bool = False
 
     use_conf: bool = False
     click_thr_db: float = 10
@@ -145,6 +146,9 @@ class TonalConfig:
     match_tolerance_Hz: int = 350
     snr_db: float = 10
     ratio_above_snr = 0.3
+
+    # model
+    log_dir: Optional[str]= None
 
 if __name__ == '__main__':
     args = tyro.cli(SAMConfig)
