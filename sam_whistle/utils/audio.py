@@ -17,7 +17,7 @@ def load_wave_file(file_path, type='tensor'):
         waveform, sample_rate = torchaudio.load(file_path)
     return waveform, sample_rate
 
-def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0, n_fft=None, hop_length=None, top_db=80.0, center = True, **kwargs):
+def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0, n_fft=None, hop_length=None, top_db=80.0, center = True, amin = 1e-10, **kwargs):
     """Convert waveform to raw spectrogram in power dB scale."""
     # fft params
     if n_fft is None:
@@ -46,7 +46,7 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
         onesided=True,
     )
     # decibel scale spectrogram with cutoff specified by top_db
-    spect_power_db = F.amplitude_to_DB(spec, multiplier=10.0, amin=1e-10, db_multiplier=0.0, top_db=top_db)
+    spect_power_db = F.amplitude_to_DB(spec, multiplier=10.0, amin=amin, db_multiplier=0.0, top_db=top_db)
     return spect_power_db # (C, freq, time)
 
 def normalize_spect(spect_db):

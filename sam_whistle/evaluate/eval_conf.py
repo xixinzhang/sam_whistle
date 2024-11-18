@@ -166,7 +166,7 @@ def evaluate_fcn_spect(args):
     if not os.path.exists(output_path) and args.visualize_eval:
         os.makedirs(output_path)
     
-    testset = WhistleDataset(args, 'test',spec_nchan=1)
+    testset = WhistleDataset(args, 'test',spect_nchan=1)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Test set size: {len(testset)}")
     loss_fn  = Charbonnier_loss()
@@ -209,7 +209,7 @@ def evaluate_fcn_encoder(args):
     if not os.path.exists(output_path) and args.visualize_eval:
         os.makedirs(output_path)
     
-    testset = WhistleDataset(args, 'test',spec_nchan=1)
+    testset = WhistleDataset(args, 'test',spect_nchan=1)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Test set size: {len(testset)}")
     loss_fn = DiceLoss()

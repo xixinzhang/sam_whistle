@@ -14,7 +14,6 @@ no skeleton, no crop
 training
 ```shell
  python sam_whistle/main.py --model sam 
-
 ```
 inference
 ```shell
@@ -31,6 +30,8 @@ python sam_whistle/evaluate/evaluate.py --no_single_eval
         python sam_whistle/evaluate/tonal_extraction/tonal_tracker.py --spect_cfg.crop
         ```
    2. evaluate
-   
+      ```shell
+      python sam_whistle/evaluate/eval_tonal.py --use_conf --log_dir logs/11-16-2024_23-45-27
+      ```
 ## Acknowledgement
 - [segment-anything](https://github.com/facebookresearch/segment-anything)

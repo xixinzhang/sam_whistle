@@ -96,21 +96,6 @@ class TonalTracker:
         gt_tonals = utils.load_annotation(bin_file)
         return gt_tonals
 
-    def _spect_to_blocks(self,):
-        """Split spectrogram into blocks for processing."""
-        spect_map =self.spect_map
-        block_size = self.spect_cfg.block_size
-        start_indices = np.arange(0, self.W, block_size)
-        slices = []
-        for start in start_indices:
-            end = start + block_size
-            if end > self.W:
-                end = self.W
-                start = end - block_size
-            slices.append((start, end))
-        blocks = [spect_map[:, start:end] for start, end in slices]
-        return blocks, slices
-
     @torch.no_grad()
     def sam_inference(self,):
         assert self.cfg.use_conf, "Not using confidence model"
@@ -252,7 +237,7 @@ class TonalTracker:
                     self.discarded_count += 1
 
         self.detected_tonals = tonals
-        print(f'Extract {len(tonals)} tonals discard {self.discarded_count} tonals from {stem}')
+        print(f'Extract {len(tonals)} tonals discard {self.discarded_count} tonals from {self.stem}')
 
         return tonals
 

@@ -224,9 +224,9 @@ def run_fcn_spect(args: config.SpectConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(args, 'train', spec_nchan=1)
+    trainset = WhistleDataset(args, 'train', spect_nchan=1)
     trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=args.num_workers, drop_last=False)
-    testset = WhistleDataset(args, 'test',spec_nchan=1)
+    testset = WhistleDataset(args, 'test',spect_nchan=1)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     
@@ -310,9 +310,9 @@ def run_fcn_encoder(args: config.SpectConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(args, 'train', spec_nchan=1)
+    trainset = WhistleDataset(args, 'train', spect_nchan=1)
     trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=args.num_workers, drop_last=False)
-    testset = WhistleDataset(args, 'test',spec_nchan=1)
+    testset = WhistleDataset(args, 'test',spect_nchan=1)
     testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     model.init_patch_ls()

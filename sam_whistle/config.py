@@ -14,6 +14,7 @@ class SpectConfig:
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
+    amin: float = 1e-15
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -30,16 +31,35 @@ class SpectConfig:
     origin_annos: bool = False
 
 @dataclass
+class PatchConfig(SpectConfig):
+    patch_size: int = 50
+    patch_stride: int = 25
+    cached_patches: bool = False
+    balance_patches: bool = True
+    slide_mean: bool = False
+
+@dataclass
+class PuConfig:
+    # data
+    spect_cfg: PatchConfig
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = None
+    log_dir: str = 'logs'
+
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+@dataclass
 class Args:
     project: Optional[str] = None
 
     # cut to patches
     patch:bool = True
-    patch_cached: bool = True
-    balanced_cached: bool = True
-    patch_size: int = 50
-    patch_stride: int = 25
-    slide_mean: bool = False
 
     # promt
     num_pos_points: int=10

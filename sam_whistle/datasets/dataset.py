@@ -1,3 +1,4 @@
+from collections import defaultdict
 import shutil
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -16,21 +17,22 @@ import os
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from sam_whistle import utils, config
+from sam_whistle.config import PuConfig, SAMConfig
 
 
 def custom_collate_fn(batch):
-    specs = [item['spect'] for item in batch]
-    masks = [item['gt_mask'] for item in batch]
+    specs = [item['img'] for item in batch]
+    masks = [item['mask'] for item in batch]
     infos = [item['info'] for item in batch]
 
     return {
-        'spect': default_collate(specs),
-        'gt_mask': default_collate(masks),
+        'img': default_collate(specs),
+        'mask': default_collate(masks),
         'info': infos
     }
             
 class WhistleDataset(Dataset):
-    def __init__(self, cfg: config.SAMConfig, split='train', img_size=1024, spec_nchan=3):
+    def __init__(self, cfg: SAMConfig, split='train', img_size=1024, spect_nchan=3):
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.debug = cfg.debug
@@ -45,7 +47,7 @@ class WhistleDataset(Dataset):
         self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
 
         self.interp = self.spect_cfg.interp
-        self.spec_nchan = spec_nchan
+        self.spect_nchan = spect_nchan
         self.transform = ResizeLongestSide(img_size)
 
         if self.cfg.preprocess:
@@ -88,6 +90,11 @@ class WhistleDataset(Dataset):
             raise ValueError(f'{self.split} not supported')
 
     def __getitem__(self, idx):
+        """"
+        Returns:
+            spect: C, H, W
+            gt_mask: 1, H, W
+        """
         if self.split == 'train':
             if not self.debug and self.spect_cfg.block_multi > 1:
                 spect_idx = np.random.choice(len(self.data), p=self.spec_prob)
@@ -100,15 +107,15 @@ class WhistleDataset(Dataset):
         else:
             spect_idx, block_slice = self.test_blocks[idx]
 
-        spect = self.data[spect_idx]['spect'][:, :, block_slice]
-        gt_mask = self.data[spect_idx]['mask'][:, block_slice][None]
+        spect = self.data[spect_idx]['img'][..., block_slice]
+        gt_mask = self.data[spect_idx]['mask'][..., block_slice]
 
-        if self.spec_nchan == 3:
+        if self.spect_nchan == 3:
             spect = torch.cat([spect, spect, spect], axis=0) # [C, H, W]
 
         data =  {
-            "spect": spect, 
-            "gt_mask": gt_mask,
+            "img": spect, 
+            "mask": gt_mask,
             "info": {'spec_idx':spect_idx, 'block_slice':block_slice}
         }
 
@@ -136,8 +143,7 @@ class WhistleDataset(Dataset):
         audio_file = self.audio_dir / f'{stem}.wav'
         bin_file = self.anno_dir/ f'{stem}.bin'
         waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
-        spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg))
-        print(f'\nLoaded spectrogram from {stem}, shape: {spec_power_db.shape},max: {spec_power_db.max():2f}, min: {spec_power_db.min():.2f}')
+        spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg)) # [C, F, T]
         spec_power_db = torch.flip(spec_power_db, [-2])
 
         # annotations
@@ -162,6 +168,9 @@ class WhistleDataset(Dataset):
             if path.exists():
                 shutil.rmtree(path)
             path.mkdir(parents=True, exist_ok=True)
+        print(f'Loaded spectrogram from {stem}.wav, shape: {spec_power_db.shape}, min: {spec_power_db.min():.2f}, max: {spec_power_db.max():2f}')
+        print(f'Loaded mask from {stem}.bin, shape: {gt_mask.shape}')
+
         torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
         np.save(self.processed_dir / f'{self.split}/{stem}/mask.npy', gt_mask)
 
@@ -185,24 +194,30 @@ class WhistleDataset(Dataset):
                 new_x = np.linspace(x_min, x_max, length*10, endpoint=True)
                 new_y = utils.interpolate_anno_point(new_x, x, y, interp)
             
-            new_x = np.maximum(0, np.minimum(new_x, shape[1]-1)).astype(int)
-            new_y = np.maximum(0, np.minimum(new_y, shape[0]-1)).astype(int)
+            new_x = np.maximum(0, np.minimum(new_x, shape[-1]-1)).astype(int)
+            new_y = np.maximum(0, np.minimum(new_y, shape[-2]-1)).astype(int)
 
             for y, x in zip(new_y, new_x):
                 mask[y, x] = 1
         return  mask
     
     def _get_data(self):
+        """Load all spectrogram and gt mask, normalize and crop
+        
+        Returns:
+            spect: C, H, W
+            gt_mask: H, W
+        """
         data = {}
         for i, stem in enumerate(self.meta):
             spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt')
             gt_mask = np.load(self.processed_dir / f'{self.split}/{stem}/mask.npy')
+            assert gt_mask.ndim == 2, 'mask should be 2D as input to cv2.dilate'
             # Get gt mask from annotation
             # Quaility of annotation varies and some annotation are missing
             self.spect_lens.append(spect.shape[-1])
             if not self.spect_cfg.skeleton:
                 gt_mask = utils.dilate_mask(gt_mask)
-                pass
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
 
@@ -211,7 +226,7 @@ class WhistleDataset(Dataset):
                 spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
                 gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
                 
-            data[i] = {'spect':spect, 'mask':gt_mask}
+            data[i] = {'img':spect, 'mask':gt_mask[None]}
         return data
             
 
@@ -247,277 +262,163 @@ class WhistleDataset(Dataset):
                 plt.close(fig)
 
 
-
 class WhistlePatch(WhistleDataset):
-    def __init__(self, args:config.Args, split='train', img_size=None):
-        super().__init__(args, split, img_size)
-        self.patch_size = args.patch_size
+    def __init__(self, cfg: PuConfig, split='train', spect_nchan=1):
+        super().__init__(cfg, split, spect_nchan=spect_nchan)
+        self.cfg = cfg
+        self.spect_cfg = cfg.spect_cfg
+        self.patch_size = self.spect_cfg.patch_size
         if split == 'train':
-            self.stride = args.patch_stride
-        else:
+            self.stride = self.spect_cfg.patch_stride
+        elif split == 'test':
             self.stride = self.patch_size
-
-        self.lmdb_path = self.processed_dir / f'patch_{split}.lmdb'
-        self.balanced_lmdb_path = self.processed_dir / f'balanced_patch_{split}.lmdb'
-        self.lmdb_path = str(self.lmdb_path)
-        self.balanced_lmdb_path = str(self.balanced_lmdb_path)
-        if args.patch_cached:
-            if not os.path.exists(self.lmdb_path):
-                raise FileNotFoundError(f'Patch cache file: {self.lmdb_path} not found')
-            if os.path.exists(self.balanced_lmdb_path) and not args.balanced_cached:
-                shutil.rmtree(self.balanced_lmdb_path)
         else:
-            if os.path.exists(self.lmdb_path):
-                shutil.rmtree(self.lmdb_path)
-            spect_list = []
-            mask_list = []
-            for idx in tqdm(range(len(self.spect_ids))):
-                spect_path = self.idx2file[idx]
-                # print(spect_path)
-                file_id = spect_path.parent.name
-                spect_split_id = int(spect_path.stem)
-                spect = np.load(spect_path)['arr_0']
-                spect = np.stack([spect, spect, spect], axis=-1)
-                ann_dict = self.all_ann_dict[file_id]
-                anns = ann_dict[str(spect_split_id)] # {'contours', 'bboxes', 'masks'}
-                bboxes = []
-                # masks = []
-                contours = []
-                # height, width, _ = spect.shape
-                for contour, bbox in zip(anns['contours'], anns['bboxes']):
-                    contours.append(contour)
-                    bboxes.append(bbox)
-                # spect, masks, bboxes = self.transform(spect, masks, np.array(bboxes))
-                bboxes = np.stack(bboxes, axis=0) # [num_obj, 4]
-                contours = [np.array(contour) for contour in contours]
-                masks = self._get_gt_masks(spect.shape[:2], contours, interp=self.interp)
-                gt_mask = utils.combine_masks(masks)
-                expand_gt_mask = self._dilate_mask(gt_mask)
+            raise ValueError(f'{split} not supported')
 
-                if args.crop:
-                    spect = spect[-self.crop_top: -self.crop_bottom+1]
-                    expand_gt_mask = expand_gt_mask[-self.crop_top: -self.crop_bottom+1]
+        self.patches_dir = self.processed_dir / 'patches'/ split
 
-                # spect= spect.transpose(-1, 0, 1) # [C, H, W]
-                # expand_gt_mask = expand_gt_mask[np.newaxis, :, :]
+        if self.spect_cfg.cached_patches:
+            pos_path = self.patches_dir / 'pos_patches.pkl'
+            neg_path = self.patches_dir / 'neg_patches.pkl'
+            if pos_path.exists() and neg_path.exists():
+                self.pos_patches = pickle.load(open(pos_path, 'rb'))
+                self.neg_patches = pickle.load(open(neg_path, 'rb'))
+            else:
+                raise FileNotFoundError(f'Cached patches not found in {self.pos_patches_path} or {self.neg_patches_path}')
+        else:
+            if self.patches_dir.exists():
+                shutil.rmtree(self.patches_dir)
+            self.patches_dir.mkdir(parents=True, exist_ok=True)
 
-                spect_list.append(spect)
-                mask_list.append(expand_gt_mask)
-            
-            self._store_patches_in_lmdb(spect_list, mask_list, self.patch_size, self.stride)
-        
+            self.pos_patches = []
+            self.neg_patches = []
+            for spec_idx, data in self.data.items():
+                spect = data['img']
+                gt_mask = data['mask']
+                H, W = spect.shape[-2:]
 
-
-        self.env = lmdb.open(self.lmdb_path, readonly=True, lock=False)
-        print(f'Original lmdb for {split} has {self.env.stat()['entries']} entries')  
-    
-        if self.split == 'train':
-            if not self.spect_cfg.balanced_cached:
-                print('Balancing positive and negative patches...')
-                self._get_balanced_lmdb()
-            self.balanced_env = lmdb.open(self.balanced_lmdb_path, readonly=True, lock=False)
-            print(f'Balenced lmdb  for {split} has {self.balanced_env.stat()['entries']} entries')
-
-    def _extract_patches(self, image, mask, patch_size=50, stride=25):
-        """
-        Extracts patches from an image and corresponding mask.
-
-        Args:
-            image (np.ndarray): The image (H, W, C) for multi-channel.
-            mask (np.ndarray): The corresponding mask (H, W).
-            patch_size (int): The size of each patch.
-            stride (int): The stride for overlapping patches.
-
-        Returns:
-            image_patches (list): List of image patches.
-            mask_patches (list): List of corresponding mask patches.
-            metadata (list): Metadata with (img_idx, i, j) where (i, j) is the top-left corner.
-        """
-        h, w = image.shape[:2]
-        image_patches = []
-        mask_patches = []
-        metadata = []
-        
-        for i in range(0, h - patch_size + 1, stride):
-            for j in range(0, w - patch_size + 1, stride):
-                image_patch = image[i:i+patch_size, j:j+patch_size, :]
-                mask_patch = mask[i:i+patch_size, j:j+patch_size]
-                image_patches.append(image_patch)
-                mask_patches.append(mask_patch)
-                metadata.append((i, j))  # Record the top-left corner of the patch
-        return image_patches, mask_patches, metadata
-
-    def _store_patches_in_lmdb(self, image_list, mask_list, patch_size=50, stride=25):
-        """
-        Partition images and masks into patches, then store them in LMDB with metadata.
-        mark the patch is positive or negative (foreground or background).
-
-        Args:
-            image_list (list of np.ndarray): List of images.
-            mask_list (list of np.ndarray): List of masks corresponding to images.
-            lmdb_path (str): Path to store the LMDB database.
-            patch_size (int): Size of each patch.
-            stride (int): Stride between patches.
-        """
-        # Open LMDB database
-        env = lmdb.open(self.lmdb_path, map_size=int(1e12)) 
-
-        patch_id = 0  # Unique patch identifier
-        with env.begin(write=True) as txn:
-            for img_idx, (image, mask) in enumerate(tqdm(zip(image_list, mask_list), total=len(image_list))):
-                # Extract patches from the image and mask
-                image_patches, mask_patches, metadata = self._extract_patches(image, mask, patch_size, stride)
-                
-                # Store patches with their positive/negative label
-                for img_patch, mask_patch, meta in zip(image_patches, mask_patches, metadata):
-                    # Determine if the patch is positive or negative
-                    if np.any(mask_patch > 0):  # Positive patch: contains non-zero pixels (foreground)
-                        label = 'positive'
-                    else:  # Negative patch: all pixels are zero (background)
-                        label = 'negative'
-
-                    # Store the patch data along with the label
-                    data = {
-                        'image_patch': img_patch,
-                        'mask_patch': mask_patch,
-                        'image_index': img_idx,
-                        'location': meta,
-                        'label': label  # 'positive' or 'negative'
+                def get_patches(i, j):
+                    label = np.sum(gt_mask[..., i:i+self.patch_size, j:j+self.patch_size]) > 0
+                    patch = {
+                        'spec_idx': spec_idx,
+                        'loc':(i, j),
+                        'label': label
                     }
-                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(data))
-                    patch_id += 1  # Increment patch ID
-    
-    def _get_balanced_lmdb(self, lmdb_batch_size=1000,):
-        """
-        Create a new LMDB with balanced positive and negative patches.
-
-        Args:
-            lmdb_path (str): Path to LMDB file.
-
-        Returns:
-            positive_patches (list): List of all positive patches from LMDB.
-            negative_patches (list): List of all negative patches from LMDB.
-        """
-        positive_patches = []
-        negative_patches = []
-        
-        with self.env.begin() as txn:
-            cursor = txn.cursor()
-            for key, patch_data in tqdm(cursor, total=self.env.stat()['entries']):
-                data = pickle.loads(patch_data)
-                # Separate positive and negative patches based on label
-                if data['label'] == 'positive':
-                    positive_patches.append(data)
-                else:
-                    negative_patches.append(data)
-
-        min_size = min(len(positive_patches), len(negative_patches))
-        print(f"Positive patches: {len(positive_patches)}, Negative patches: {len(negative_patches)}")
-
-        # Randomly downsample the larger set
-        balanced_positive = random.sample(positive_patches, min_size) if len(positive_patches) > min_size else positive_patches
-        balanced_negative = random.sample(negative_patches, min_size) if len(negative_patches) > min_size else negative_patches
-
-        balanced_env = lmdb.open(self.balanced_lmdb_path, map_size=int(1e12))
-
-        patch_id = 0  # New patch ID for the balanced dataset
-        for i in tqdm(range(0, min_size, lmdb_batch_size)):
-            # Batch the writes in chunks
-            with balanced_env.begin(write=True) as txn:
-                for batch_idx in range(i, min(i + lmdb_batch_size, min_size)):
-                    # Add positive patches
-                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(balanced_positive[batch_idx]))
-                    patch_id += 1
-                    # Add negative patches
-                    txn.put(f'patch_{patch_id}'.encode(), pickle.dumps(balanced_negative[batch_idx]))
-                    patch_id += 1
+                    if label:
+                        self.pos_patches.append(patch)
+                    else:
+                        self.neg_patches.append(patch)
+                # Extract patches from the image and mask and keep last complete patch
+                for i in range(0, H- self.patch_size + 1,self.stride):
+                    for j in range(0, W - self.patch_size + 1, self.stride):
+                        get_patches(i, j)
+                    
+                    if W % self.patch_size != 0:
+                        j = W - self.patch_size
+                        get_patches(i, j)
                 
+                if H % self.patch_size != 0:
+                    i = H - self.patch_size
+                    for j in range(0, W - self.patch_size + 1, self.stride):
+                        get_patches(i, j)
+                    if W % self.patch_size != 0:
+                        j = W - self.patch_size
+                        get_patches(i, j)
+                
+            with open (self.patches_dir / 'pos_patches.pkl', 'wb') as f:
+                pickle.dump(self.pos_patches, f)
+            with open (self.patches_dir / 'neg_patches.pkl', 'wb') as f:
+                pickle.dump(self.neg_patches, f)
 
-    def _retrieve_patch_from_lmdb(self, patch_id):
-        """
-        Retrieve a patch and its metadata from LMDB.
+        print(f'Positive patches: {len(self.pos_patches)}, Negative patches: {len(self.neg_patches)}')
+        
+        if self.split == 'train' and  self.spect_cfg.balance_patches:
+            print('Balancing positive and negative patches...')
+            balanced_size = min(len(self.pos_patches), len(self.neg_patches))
+            if balanced_size <= len(self.neg_patches):
+                self.patch_data = self.pos_patches + random.sample(self.neg_patches, balanced_size)
+            else:
+                self.patch_data = random.sample(self.pos_patches, balanced_size) + self.neg_patches
+            print(f'Balanced dataset has {len(self.patch_data)} patches')
+        else:
+            self.patch_data = self.pos_patches + self.neg_patches
+            print(f'Imbalanced dataset has {len(self.patch_data)} patches')
 
-        Args:
-            lmdb_path (str): Path to LMDB file.
-            patch_id (int): The unique patch ID.
-
-        Returns:
-            dict: A dictionary containing the image patch, mask patch, metadata, and label.
-        """
-        if self.split == 'train':
-            with self.balanced_env.begin() as txn:
-                patch_data = txn.get(f'patch_{patch_id}'.encode())
-                data = pickle.loads(patch_data)
-                return data
-        elif self.split == 'test':
-            with self.env.begin() as txn:
-                patch_data = txn.get(f'patch_{patch_id}'.encode())
-                data = pickle.loads(patch_data)
-                return data
-            
     def __len__(self):
-        if self.split == 'train':
-            return self.balanced_env.stat()['entries']
-        elif self.split == 'test':
-            return self.env.stat()['entries']
+        return len(self.patch_data)
+
         
     def __getitem__(self, idx):
-        data = self._retrieve_patch_from_lmdb(idx)
-        img_patch = data['image_patch'][..., [0]]
-        mask_patch = data['mask_patch']
+        patch_meta = self.patch_data[idx]
+        spec_idx = patch_meta['spec_idx']
+        i, j = patch_meta['loc']
+        patch= self.data[spec_idx]['img'][..., i:i+self.patch_size, j:j+self.patch_size]
+        patch_mask = self.data[spec_idx]['mask'][..., i:i+self.patch_size, j:j+self.patch_size]
+        label = patch_meta['label']
 
-        img_patch= img_patch.transpose(-1, 0, 1) # [C, H, W]
-        mask_patch = mask_patch[np.newaxis, :, :]
+        data = {
+            'img': patch,
+            'mask': patch_mask,
+            'info': {'spec_idx': spec_idx, 'loc': (i, j), 'label': label}
+        }
+        return data
 
-        if self.split == 'train':
-            return img_patch, mask_patch
-        elif self.split == 'test': 
-            meta = {"image_index": data['image_index'], "location": data['location']}
-            return img_patch, mask_patch, meta
-
-
-def check_spec_dataset(cfg:config.SAMConfig):
-    train_set = WhistleDataset(cfg, 'train', spec_nchan=1)
-    test_set = WhistleDataset(cfg, 'test', spec_nchan=1)
+def check_spect_dataset(cfg:SAMConfig):
+    train_set = WhistleDataset(cfg, 'train', spect_nchan=1)
+    test_set = WhistleDataset(cfg, 'test', spect_nchan=1)
     print(f'Train blocks: {len(train_set)}, Test blocks: {len(test_set)}')
     
     for stem in train_set.meta:
         shutil.rmtree(f'outputs/debug/train/{stem}', ignore_errors=True)
     for i, data in enumerate(tqdm(train_set, desc='check train set')):
-        spec, mask, info = data['spect'], data['gt_mask'], data['info']
+        spec, mask, info = data['img'], data['mask'], data['info']
         spec_id = info['spec_idx']
         stem = train_set.meta[spec_id]
         save_dir=f'outputs/debug/train/{stem}'
-        utils.visualize_array(spec, cmap='bone', filename=f'train_{info["block_slice"].start}_0.spec', save_dir = save_dir)
-        utils.visualize_array(mask, cmap='gray', filename=f'train_{info["block_slice"].start}_1.mask', save_dir = save_dir)
+        utils.visualize_array(spec, cmap='bone', filename=f'train_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
+        utils.visualize_array(mask, cmap='gray', filename=f'train_{spec_id}_{info["block_slice"].start}_2.mask', save_dir = save_dir)
 
     for stem in test_set.meta:
         shutil.rmtree(f'outputs/debug/test/{stem}', ignore_errors=True)
     for i, data in enumerate(tqdm(test_set, desc='check test set')):
-        spec, mask, info = data['spect'], data['gt_mask'], data['info']
+        spec, mask, info = data['img'], data['mask'], data['info']
         spec_id = info['spec_idx']
         stem = test_set.meta[spec_id]
         save_dir=f'outputs/debug/test/{stem}'
-        utils.visualize_array(spec, cmap='bone',filename=f'test_{info["block_slice"].start}_0.spec', save_dir = save_dir)
-        utils.visualize_array(mask, cmap='gray',filename=f'test_{info["block_slice"].start}_1.gt', save_dir = save_dir)
+        utils.visualize_array(spec, cmap='bone',filename=f'test_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
+        utils.visualize_array(mask, cmap='gray',filename=f'test_{spec_id}_{info["block_slice"].start}_2.mask', save_dir = save_dir)
 
-def check_spec_block(cfg:config.SAMConfig, spec_idx, start, split = 'train', ):
+def check_spect_block(cfg:SAMConfig, spec_idx=0, start=0, split = 'train', ):
     data_set = WhistleDataset(cfg, split)
     check_block = data_set.data[spec_idx]
-    spect = check_block['spect'][..., start:start+ cfg.spect_cfg.block_size]
+    spect = check_block['img'][..., start:start+ cfg.spect_cfg.block_size]
     mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
     utils.visualize_array(spect, cmap='bone')
     utils.visualize_array(mask, cmap='gray')
 
 if __name__ == "__main__":
-    cfg = tyro.cli(config.SAMConfig)
-    # check_spec_dataset(cfg)
-    check_spec_block(cfg, 0, 0, 'test')
-
-    # WhistlePatch
-    # train_set = WhistlePatch(args, 'train')
-    # test_set = WhistlePatch(args, 'test')
-    # img, mask = train_set[0]
-    # print(img.shape, mask.shape)
-    # visualization.visualize_array(img, mask=mask, random_colors=False, filename='patch')
-    # visualization.visualize_array(img, random_colors=False, filename='patch2')
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_type', type=str, default='spect')
+    args, remaining = parser.parse_known_args()
+    if args.data_type == 'spect':
+        cfg = tyro.cli(SAMConfig, args=remaining)
+        check_spect_dataset(cfg)
+        check_spect_block(cfg, 0, 0, 'test')
+    elif args.data_type == 'patch':
+        cfg = tyro.cli(PuConfig, args=remaining)
+        train_set = WhistlePatch(cfg, 'train')
+        img, mask = train_set[0]['img'], train_set[0]['mask']
+        label = train_set[0]['info']['label']
+        print(img.shape, mask.shape, label, mask.sum())
+        utils.visualize_array(img, filename='train_patch_img')
+        utils.visualize_array(img, mask=mask.astype(int), random_colors=False, mask_alpha=1, filename='train_patch_mask')
+        test_set = WhistlePatch(cfg, 'test')
+        print(len(train_set), len(test_set))
+        img, mask = test_set[0]['img'], test_set[0]['mask']
+        label = test_set[0]['info']['label']
+        print(img.shape, mask.shape, label, mask.sum())
+        utils.visualize_array(img, filename='test_patch_img')
+        utils.visualize_array(img, mask=mask.astype(int), random_colors=False, mask_alpha=1, filename='test_patch_mask')
+    else:
+        raise ValueError(f'{args.data_type} not supported')

@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 import torch
-plt.switch_backend('agg')
+# plt.switch_backend('agg')
 
 def show_spect(spect:np.array, fig, save:str = None):
     ax = fig.gca()

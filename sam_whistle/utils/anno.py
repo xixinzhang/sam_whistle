@@ -4,8 +4,9 @@ from scipy.interpolate import interp1d, splev, splrep
 from numpy.polynomial import Polynomial
 import cv2
 from skimage.morphology import skeletonize
+from pathlib import Path    
 
-def load_annotation(bin_file)-> list[np.ndarray]:
+def load_annotation(bin_file:Path)-> list[np.ndarray]:
     """Read the bin file and obtain annotations of each contour"""
     data_format = 'dd'  # 2 double-precision [time(s), frequency(Hz)]
     num_dim = 2
@@ -30,7 +31,7 @@ def load_annotation(bin_file)-> list[np.ndarray]:
             cur += point_bytes_num
             if cur >= total_bytes_num:
                 break
-        print(f'{bin_file} has {len(annos)} annotated whistles')
+        print(f'Loaded {len(annos)} annotated whistles from {bin_file.stem}.bin')
         return annos  #[(time(s), frequency(Hz)),...]
 
 def anno_to_spect_point(anno, height = 769, hop_ms = 2, freq_bin = 125):

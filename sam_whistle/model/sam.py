@@ -77,6 +77,10 @@ class SAM_whistle(nn.Module):
         return checkpoint
 
     def forward(self, spect):
+        """
+        Args:
+            spect: (B, C, H, W)
+        """
         if self.cfg.use_prompt:
             spect, gt_mask, points= spect  # BhWC, BHW, (BN2,BN)
             coords, labels = points
@@ -89,7 +93,6 @@ class SAM_whistle(nn.Module):
                 masks=None
             )   
    
-        spect = spect.to(self.device)
         transformed_spect = self.transform.apply_image_torch(spect)
         input_spect = self.sam_model.preprocess(transformed_spect*255)  # [0, 1]
         
