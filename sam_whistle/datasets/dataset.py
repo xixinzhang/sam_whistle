@@ -17,7 +17,7 @@ import os
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from sam_whistle import utils, config
-from sam_whistle.config import PuConfig, SAMConfig
+from sam_whistle.config import DWConfig, SAMConfig
 
 
 def custom_collate_fn(batch):
@@ -32,7 +32,7 @@ def custom_collate_fn(batch):
     }
             
 class WhistleDataset(Dataset):
-    def __init__(self, cfg: SAMConfig, split='train', img_size=1024, spect_nchan=3):
+    def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3):
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.debug = cfg.debug
@@ -48,7 +48,6 @@ class WhistleDataset(Dataset):
 
         self.interp = self.spect_cfg.interp
         self.spect_nchan = spect_nchan
-        self.transform = ResizeLongestSide(img_size)
 
         if self.cfg.preprocess:
             self._preprocess()
@@ -263,7 +262,7 @@ class WhistleDataset(Dataset):
 
 
 class WhistlePatch(WhistleDataset):
-    def __init__(self, cfg: PuConfig, split='train', spect_nchan=1):
+    def __init__(self, cfg: DWConfig, split='train', spect_nchan=1):
         super().__init__(cfg, split, spect_nchan=spect_nchan)
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
@@ -297,7 +296,17 @@ class WhistlePatch(WhistleDataset):
                 gt_mask = data['mask']
                 H, W = spect.shape[-2:]
 
-                def get_patches(i, j):
+                # Extract patches from the image and mask and keep last complete patch
+                i_coords = list(range(0, H - self.patch_size + 1, self.stride))
+                j_coords = list(range(0, W - self.patch_size + 1, self.stride))
+                if H % self.patch_size != 0:
+                        i_coords.append(H - self.patch_size)
+                if W % self.patch_size != 0:
+                    j_coords.append(W - self.patch_size)
+                ii, jj = np.meshgrid(i_coords, j_coords, indexing='ij')
+                start_positions = np.column_stack((ii.ravel(), jj.ravel()))
+
+                for i, j in start_positions:
                     label = np.sum(gt_mask[..., i:i+self.patch_size, j:j+self.patch_size]) > 0
                     patch = {
                         'spec_idx': spec_idx,
@@ -308,22 +317,7 @@ class WhistlePatch(WhistleDataset):
                         self.pos_patches.append(patch)
                     else:
                         self.neg_patches.append(patch)
-                # Extract patches from the image and mask and keep last complete patch
-                for i in range(0, H- self.patch_size + 1,self.stride):
-                    for j in range(0, W - self.patch_size + 1, self.stride):
-                        get_patches(i, j)
-                    
-                    if W % self.patch_size != 0:
-                        j = W - self.patch_size
-                        get_patches(i, j)
-                
-                if H % self.patch_size != 0:
-                    i = H - self.patch_size
-                    for j in range(0, W - self.patch_size + 1, self.stride):
-                        get_patches(i, j)
-                    if W % self.patch_size != 0:
-                        j = W - self.patch_size
-                        get_patches(i, j)
+
                 
             with open (self.patches_dir / 'pos_patches.pkl', 'wb') as f:
                 pickle.dump(self.pos_patches, f)
@@ -333,16 +327,15 @@ class WhistlePatch(WhistleDataset):
         print(f'Positive patches: {len(self.pos_patches)}, Negative patches: {len(self.neg_patches)}')
         
         if self.split == 'train' and  self.spect_cfg.balance_patches:
-            print('Balancing positive and negative patches...')
             balanced_size = min(len(self.pos_patches), len(self.neg_patches))
             if balanced_size <= len(self.neg_patches):
                 self.patch_data = self.pos_patches + random.sample(self.neg_patches, balanced_size)
             else:
                 self.patch_data = random.sample(self.pos_patches, balanced_size) + self.neg_patches
-            print(f'Balanced dataset has {len(self.patch_data)} patches')
+            print(f'Balanced {self.split } dataset has {len(self.patch_data)} patches')
         else:
             self.patch_data = self.pos_patches + self.neg_patches
-            print(f'Imbalanced dataset has {len(self.patch_data)} patches')
+            print(f'Imbalanced {self.split } dataset has {len(self.patch_data)} patches')
 
     def __len__(self):
         return len(self.patch_data)
@@ -406,7 +399,7 @@ if __name__ == "__main__":
         check_spect_dataset(cfg)
         check_spect_block(cfg, 0, 0, 'test')
     elif args.data_type == 'patch':
-        cfg = tyro.cli(PuConfig, args=remaining)
+        cfg = tyro.cli(DWConfig, args=remaining)
         train_set = WhistlePatch(cfg, 'train')
         img, mask = train_set[0]['img'], train_set[0]['mask']
         label = train_set[0]['info']['label']

@@ -36,10 +36,9 @@ class PatchConfig(SpectConfig):
     patch_stride: int = 25
     cached_patches: bool = False
     balance_patches: bool = True
-    slide_mean: bool = False
 
 @dataclass
-class PuConfig:
+class DWConfig:
     # data
     spect_cfg: PatchConfig
     root_dir: str = 'data/dclde'
@@ -48,11 +47,50 @@ class PuConfig:
     preprocess: bool = False
 
     debug: bool = False
-    exp_name: Optional[str] = None
+    exp_name: Optional[str] = "deep_whistle"
     log_dir: str = 'logs'
 
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_workers:int = 8
+    visualize_eval: bool = False
+    width: int = 32
+    lr: float = 1e-3
+    batch_size: int = 64
+    adam_decay: float = 0.00001
+    scheduler_gamma: float = 0.1
+    scheduler_stepsize:int = 250000
+    iter_num: int = 600000
+    iter_num_more: int = 1200000
 
+@dataclass
+class FCNSpectConfig:
+    spect_cfg: PatchConfig
+    # data
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = "fcn_spect"
+    log_dir: str = 'logs'
+
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_workers:int = 8
+    visualize_eval: bool = False
+    width: int = 32
+    lr: float = 1e-3
+    spect_batch = 2048
+    batch_size: int = 2
+    adam_decay: float = 0.00001
+    scheduler_gamma: float = 0.1
+    scheduler_stepsize:int = 250000
+    iter_num: int = 600000
+    iter_num_more: int = 1200000
+
+    random_patch_order: bool = False
+    fcn_spect_epochs: int = 100
+    slide_mean: bool = False
 
 @dataclass
 class Args:
@@ -76,20 +114,10 @@ class Args:
 
     
     # PU Model & Training
-    pu_width: int = 32
-    pu_lr: float = 1e-3
-    pu_batch_size: int = 64
-    pu_adam_decay: float = 0.00001
-    pu_scheduler_gamma: float = 0.1
-    pu_scheduler_stepsize: int = 250000
-    pu_iters: int = 600000
-    pu_epochs: int = 400
     pu_model_path: str = '/home/asher/Desktop/projects/sam_whistle/logs/10-06-2024_15-20-41_pu/model_pu.pth'
 
     # FCN spect
-    fcn_spect_batch = 2048
-    random_patch_order: bool = False
-    fcn_spect_epochs: int = 100
+
 
     # FCN Encoder
     fcn_encoder_lr: float = 1e-4
@@ -112,7 +140,7 @@ class SAMConfig:
     preprocess: bool = False
 
     debug: bool = False
-    exp_name: Optional[str] = None
+    exp_name: Optional[str] = "sam"
     log_dir: str = 'logs'
 
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'

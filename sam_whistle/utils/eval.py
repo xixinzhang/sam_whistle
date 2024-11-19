@@ -7,19 +7,21 @@ from typing import Dict, List
 @dataclass
 class EvalResults:
     model_name: str
-    precision: float  # Average precision
-    recall: float    # At optimal threshold
+    precision: float  
+    recall: float   
     f1: float
-    threshold: float  # Optimal threshold
+    threshold: float
     # For plotting PR curve
     precisions: List[float]  
     recalls: List[float]
     thresholds: List[float]
-    
+
 
 def evaluate_model(y_true: np.ndarray, 
                   y_pred: np.ndarray, 
-                  model_name: str) -> EvalResults:
+                  model_name: str,
+                  min_thre = 0, 
+                  max_thre=1) -> EvalResults:
     """
     Evaluate segmentation model performance.
     
@@ -33,20 +35,16 @@ def evaluate_model(y_true: np.ndarray,
         y_true = y_true.ravel()
         y_pred = y_pred.ravel()
     
-    # Calculate PR curve
     precisions, recalls, thresholds = precision_recall_curve(y_true, y_pred)
-    
-    # Calculate F1 scores for each threshold
+    range_idx = np.where((thresholds >= min_thre) & (thresholds <= max_thre))
+    precisions = precisions[range_idx]
+    recalls = recalls[range_idx]
+    thresholds = thresholds[range_idx]
+
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
-    
-    # Find optimal threshold that maximizes F1
     optimal_idx = np.argmax(f1_scores)
     optimal_threshold = thresholds[optimal_idx]
-    
-    # Get binary predictions at optimal threshold
     y_pred_binary = (y_pred >= optimal_threshold).astype(int)
-    
-    # Calculate final metrics
     final_f1 = f1_score(y_true, y_pred_binary)
     
     return EvalResults(

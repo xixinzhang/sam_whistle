@@ -1,4 +1,5 @@
 import pickle
+from typing import Union
 import torch
 from torch import nn
 import os
@@ -14,7 +15,7 @@ from dataclasses import dataclass, asdict
 from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
 from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
 from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch, custom_collate_fn
-from sam_whistle import config
+from sam_whistle.config import SAMConfig, DWConfig, FCNSpectConfig
 from sam_whistle import utils
 from sam_whistle.utils.visualize import visualize
 
@@ -32,7 +33,7 @@ class EvalResults:
 
 
 @torch.no_grad()
-def evaluate_sam_prediction(cfg: config.SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
     if load:
         model = SAM_whistle(cfg)
         model.to(cfg.device)
@@ -65,7 +66,7 @@ def evaluate_sam_prediction(cfg: config.SAMConfig, load=False, model: SAM_whistl
     all_gts = []
     all_preds = []
     for i, data in enumerate(tqdm(testloader)):
-        spect, gt_mask = data['spect'], data['gt_mask']
+        spect, gt_mask = data['img'], data['mask']
         spect = spect.to(cfg.device)
         gt_mask = gt_mask.to(cfg.device)
 
@@ -90,115 +91,101 @@ def evaluate_sam_prediction(cfg: config.SAMConfig, load=False, model: SAM_whistl
     else:
         return test_loss
 
-def evaluate_sam(args: config.SAMConfig, visualize_eval=False, visualize_name=''):
-    test_loss, all_gts, all_preds = evaluate_sam_prediction(args, load= True, visualize_eval = visualize_eval, visualize_name=visualize_name)
-    print(f"Test Loss: {test_loss}")
-    eval_res: utils.EvalResults = utils.evaluate_model(all_gts, all_preds, "SAM")
-    print(f"Precision: {eval_res.precision}, Recall: {eval_res.recall}, F1: {eval_res.f1}, Threshold: {eval_res.threshold}")
-    with open(os.path.join(args.log_dir, 'eval_sam_results.pkl'), 'wb') as f:
-        pickle.dump(eval_res, f)
-    
-    plt.figure(figsize=(10, 8))
-    plt.plot(eval_res.recalls, eval_res.precisions, 
-            label=f'{eval_res.model_name} (AP={eval_res.precision:.3f})')
-
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curves')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(args.log_dir, 'pr_curves.png'))
-    plt.close()
-
 
 @torch.no_grad()
-def evaluate_pu(args):
-    print("------------Evaluating model------------")
-    model = Detection_ResNet_BN2(args.pu_width)
-    model.to(args.device)
-    model.load_state_dict(torch.load(os.path.join(args.log_dir, 'model_pu.pth')))
-    output_path = os.path.join(args.log_dir, 'predictions')
-    if not os.path.exists(output_path) and args.visualize_eval:
-        os.makedirs(output_path)
-    
-    # trainset = WhistleDataset(args, 'train', model.sam_model.image_encoder.img_size)
-    # trainloader = DataLoader(trainset, batch_size=1, shuffle=False, num_workers=os.cpu_count(), drop_last=True)
-    testset = WhistlePatch(args, 'test',)
-    testloader = DataLoader(testset, batch_size=args.pu_batch_size, shuffle=False, num_workers=args.num_workers,)
-    print(f"Test set size: {len(testset)}")
-    
-    loss_fn  = Charbonnier_loss()
+def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+    if load:
+        model = Detection_ResNet_BN2(cfg.width)
+        model.to(cfg.device)
+        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model_dw.pth')))
+        
+        output_path = os.path.join(cfg.log_dir, 'predictions')
+        if not os.path.exists(output_path) and visualize_eval:
+            os.makedirs(output_path)
+        
+        testset = WhistlePatch(cfg, 'test',)
+        testloader = DataLoader(testset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
+        loss_fn  = Charbonnier_loss()
+    else:
+        assert model is not None and testloader is not None and loss_fn is not None
     
     model.eval()
     test_losses = []
-    gt_masks = []
-    pred_masks = []
+    all_gts = []
+    all_preds = []
     for i, data in enumerate(tqdm(testloader)):
-        with torch.no_grad():
-            img, gt_mask, meta = data
-            img = img.to(args.device)
-            gt_mask = gt_mask.to(args.device)
+        img, mask = data['img'], data['mask']
+        img = img.to(cfg.device)
+        mask = mask.to(cfg.device)
+        pred_mask = model(img)
+        test_loss = loss_fn(pred_mask, mask)
+        test_losses.append(test_loss.item())
+
+        if load:
+            all_gts.append(mask)
+            all_preds.append(pred_mask)
+
+    test_loss = np.mean(test_losses)
+    if load:
+        all_gts = torch.cat(all_gts, dim=0).cpu().numpy()
+        all_preds = torch.cat(all_preds, dim=0).cpu().numpy()
+        return test_loss, all_gts, all_preds,
+    else:
+        return test_loss
+    
+@torch.no_grad()
+def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Spect = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+    print("------------Evaluating model------------")
+    
+    testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers,)
+    print(f"Test set size: {len(testset)}")
+    loss_fn  = Charbonnier_loss()
+    
+    if load:
+        model = Detection_ResNet_BN2(cfg.width)
+        model.to(cfg.device)
+        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model_dw.pth')))
+        
+        output_path = os.path.join(cfg.log_dir, 'predictions')
+        if not os.path.exists(output_path) and visualize_eval:
+            os.makedirs(output_path)
+        
+        testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+        testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers)
+        loss_fn  = Charbonnier_loss()
+    else:
+        assert model is not None and testloader is not None and loss_fn is not None
+    
+    model.init_patch_ls(testset[0]['img'].shape[-2:])
+    model.order_pick_patch()
+    model.eval()
+
+    test_losses = []
+    all_gts = []
+    all_preds = []
+    for i, data in enumerate(tqdm(testloader)):
+            img, mask = data['img'], data['mask']
+            img = img.to(cfg.device)
+            mask = mask.to(cfg.device)
+
             pred_mask = model(img)
-            test_loss = loss_fn(pred_mask, gt_mask)
-            gt_masks.append(gt_mask)
-            pred_masks.append(pred_mask)
-
-            if args.visualize_eval:
-                # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
-                visualize(img, gt_mask, pred_mask, output_path, i)
+            test_loss = loss_fn(pred_mask, mask)
             test_losses.append(test_loss.item())
+            
+            if load:
+                all_gts.append(mask)
+                all_preds.append(pred_mask)
+            if cfg.visualize_eval:
+                visualize(img, mask, pred_mask, output_path, i)
 
     test_loss = np.mean(test_losses)
-    print(f"Test Loss: {test_loss}")
-    gt_masks = torch.cat(gt_masks, dim=0).flatten().cpu().numpy()
-    pred_masks = torch.cat(pred_masks, dim=0).flatten().cpu().numpy()
-    precision, recall, thresholds = precision_recall_curve(gt_masks, pred_masks)
-
-    return precision, recall, thresholds
-
-
-def evaluate_fcn_spect(args):
-    print("------------Evaluating model------------")
-    model = FCN_Spect(args)
-    model.to(args.device)
-    model.load_state_dict(torch.load(os.path.join(args.log_dir, 'model.pth')))
-    output_path = os.path.join(args.log_dir, 'predictions')
-    if not os.path.exists(output_path) and args.visualize_eval:
-        os.makedirs(output_path)
+    if load:
+        all_gts = torch.cat(all_gts, dim=0).cpu().numpy()
+        all_preds = torch.cat(all_preds, dim=0).cpu().numpy()
+        return test_loss, all_gts, all_preds,
+    else:
+        return test_loss
     
-    testset = WhistleDataset(args, 'test',spect_nchan=1)
-    testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
-    print(f"Test set size: {len(testset)}")
-    loss_fn  = Charbonnier_loss()
-    
-    model.eval()
-    model.init_patch_ls(testset[0][0].shape[-2:])
-    test_losses = []
-    gt_masks = []
-    pred_masks = []
-    for i, data in enumerate(tqdm(testloader)):
-        with torch.no_grad():
-            img, gt_mask= data
-            img = img.to(args.device)
-            gt_mask = gt_mask.to(args.device)
-            model.order_pick_patch()
-            pred_mask, gt_mask = model(img, gt_mask)
-            test_loss = loss_fn(pred_mask, gt_mask)
-            gt_masks.append(gt_mask)
-            pred_masks.append(pred_mask)
-
-            if args.visualize_eval:
-                # utils.visualize_array(low_mask.cpu().numpy(), output_path, i, 'low_res')
-                visualize(img, gt_mask, pred_mask, output_path, i)
-            test_losses.append(test_loss.item())
-
-    test_loss = np.mean(test_losses)
-    print(f"Test Loss: {test_loss}")
-    gt_masks = torch.cat(gt_masks, dim=0).flatten().cpu().numpy()
-    pred_masks = torch.cat(pred_masks, dim=0).flatten().cpu().numpy()
-    precision, recall, thresholds = precision_recall_curve(gt_masks, pred_masks)
-
-    return precision, recall, thresholds
 
 def evaluate_fcn_encoder(args):
     print("------------Evaluating model------------")
@@ -242,88 +229,54 @@ def evaluate_fcn_encoder(args):
 
     return precision, recall, thresholds
 
-
-def filter_precision_recall(precision, recall, thresholds, model_name, min_threshold=0, max_threshold=1, save_path=None):
-    precision = precision[:-1]
-    recall = recall[:-1]
-
-    # filter
-    valid_indices = (precision > 0) & (recall > 0)
-    precision_filtered = precision[valid_indices]
-    recall_filtered = recall[valid_indices]
-    thresholds_filtered = thresholds[valid_indices]
-    f1_filtered =  2 * (precision_filtered * recall_filtered) / (precision_filtered + recall_filtered)
+def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SAM', visualize_eval=False, visualize_name='', min_thre = 0, max_thre=1):
+    test_loss, all_gts, all_preds = eval_fn(cfg, load= True, visualize_eval = visualize_eval, visualize_name=visualize_name)
+    eval_res = utils.evaluate_model(all_gts, all_preds, model_name, min_thre, max_thre)
+    print(f"Test Loss: {test_loss:.3f}")
+    print(f"Precision: {eval_res.precision:.3f}, Recall: {eval_res.recall:.3f}, F1: {eval_res.f1:.3f}, Threshold: {eval_res.threshold:.3f}")
     
+    with open(os.path.join(cfg.log_dir, f'{model_name}_results.pkl'), 'wb') as f:
+        pickle.dump(eval_res, f)
+    
+    plt.figure(figsize=(10, 8))
+    plt.plot(eval_res.recalls, eval_res.precisions, 
+            label=f'{eval_res.model_name} (F1={eval_res.f1:.3f})')
+    plt.scatter(eval_res.recall, eval_res.precision, zorder=5)
 
-    range_indices = (thresholds >= min_threshold) & (thresholds <= max_threshold)
-
-    # Further filtering based on the limits for precision and recall
-    precision_range = precision_filtered[range_indices]
-    recall_range = recall_filtered[range_indices]
-    f1_range = f1_filtered[range_indices]
-    thresholds_range = thresholds_filtered[range_indices]
-    print(f"Best F1 score: {np.max(f1_range)}")
-    if save_path is not None:
-        # Save precision_range, recall_range, thresholds_range, f1_range in a file
-        if save_path is not None:
-            data = {
-                'model': model_name,
-                'precision_range': precision_range,
-                'recall_range': recall_range,
-                'thresholds_range': thresholds_range,
-                'f1_range': f1_range
-            }
-            file_path = os.path.join(save_path, 'evaluation_results.pkl')
-            with open(file_path, 'wb') as f:
-                pickle.dump(data, f)
-
-    return precision_range, recall_range, thresholds_range, f1_range
-
-
-def plot_precision_recall(precision, recall, thresholds, f1_score, model_names, save_path=None):
-    plt.figure(figsize=(8, 6))
-    # Optional: Plot F1 score iso-contours
     precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), np.linspace(0.01, 1, 100))
     f1_grid = 2 * (precision_grid * recall_grid) / (precision_grid + recall_grid)
-    fi_contour = plt.contour(recall_grid, precision_grid, f1_grid, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
-    
-    for r, p, f, model in zip(recall, precision, f1_score, model_names):
-        plt.plot(r, p)
-        best_idx = np.argmax(f)
-        plt.scatter(r[best_idx], p[best_idx], label=f'Best F1: {model}', zorder=5)
-    
-    plt.clabel(fi_contour, fmt='%.2f', inline=True, fontsize=10)
+    f1_contour = plt.contour(recall_grid, precision_grid, f1_grid, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
+    plt.clabel(f1_contour, fmt='%.2f', inline=True, fontsize=10)
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.grid(True)
+    plt.title('Precision-Recall Curves')
     plt.legend(loc = 'lower left')
+    plt.grid(True)
     plt.xticks(np.arange(0, 1.1, 0.1))
     plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.savefig(os.path.join(save_path, 'precision_recall_curve.png'))
+    plt.savefig(os.path.join(cfg.log_dir, 'precision_recall_curve.png'))
+    plt.close()
+
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='sam', help='Model to evaluate')
     parser.add_argument('--eval_single', action = 'store_true', help='Evaluate a single model')
+    parser.add_argument('--model', type=str, default='sam_whistle', help='Model to evaluate')
     parser.add_argument('--visual', action = 'store_true', help='Visualize the predictions')
     parser.add_argument('--visual_name', type=str, default='', help='Name of the visualized file')
+    parser.add_argument('--min_thre', type=float, default=0, help='Minimum threshold for filtering')
+    parser.add_argument('--max_thre', type=float, default=1, help='Maximum threshold for filtering')
     args, remaining = parser.parse_known_args()
     if args.eval_single:
 
         if args.model == 'sam':
-            cfg = tyro.cli(config.SAMConfig, args=remaining)
-            evaluate_sam(cfg, visualize_eval=args.visual, visualize_name=args.visual_name)
-        # if args.model == 'sam':
-        #     precision, recall, thresholds= evaluate_sam(args)
-        #     precision_range, recall_range, thresholds_range, f1_range= filter_precision_recall(precision, recall, thresholds, 'sam', save_path=args.log_dir)
-        #     model_names = ['SAM']
-        # elif args.model=='pu':
-        #     precision, recall, thresholds= evaluate_pu(args)
-        #     precision_range, recall_range, thresholds_range, f1_range= filter_precision_recall(precision, recall, thresholds, 'pu', save_path=args.log_dir)
-        #     model_names = ['PU']
+            cfg = tyro.cli(SAMConfig, args=remaining)
+            evaluate_conf_map(cfg,eval_fn=evaluate_sam_prediction, model_name='sam_whistle', visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+        elif args.model == 'deep':
+            cfg = tyro.cli(DWConfig, args=remaining)
+            evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction,model_name='deep_whistle', visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         # elif args.model=='fcn_spect':
         #     precision, recall, thresholds= evaluate_fcn_spect(args)
         #     precision_range, recall_range, thresholds_range, f1_range= filter_precision_recall(precision, recall, thresholds, 'fcn_spect', save_path=args.log_dir)
