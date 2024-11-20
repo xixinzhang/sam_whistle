@@ -35,24 +35,21 @@ class FCN_Spect(nn.Module):
     def order_pick_patch(self):
         if self.cfg.random_patch_order and self.training:
             order = np.random.permutation(self.patch_num)
-            self.pick_patch= self.patch_starts[order]
+            self.patch_starts= self.patch_starts[order]
         else:
-            self.pick_patch = self.patch_starts
+            self.patch_starts = self.patch_starts
 
     def forward(self, spect):
         patch_size = self.patch_size
 
-        if self.training:
-            patch_count = torch.zeros_like(spect)
-            pred_image = torch.zeros_like(spect)
+        patch_count = torch.zeros_like(spect)
+        pred_image = torch.zeros_like(spect)
 
-            for p in self.pick_patch:
-                i, j = p
-                patch = spect[..., i:i+patch_size, j:j+patch_size]
-                patch_pred = self.fcn(patch)
-
-                pred_image[..., i:i+patch_size, j:j+patch_size] += patch_pred
-                patch_count[..., i:i+patch_size, j:j+patch_size] += 1
-               
-            pred_image /= patch_count
-            return pred_image
+        patches = torch.cat([spect[..., i:i+patch_size, j:j+patch_size] for i, j in self.patch_starts], dim=0)
+        patches_pred = self.fcn(patches)
+        for idx, (i, j) in enumerate(self.patch_starts):
+            pred_image[..., i:i+patch_size, j:j+patch_size] += patches_pred[idx]
+            patch_count[..., i:i+patch_size, j:j+patch_size] += 1
+            
+        pred_image /= patch_count
+        return pred_image

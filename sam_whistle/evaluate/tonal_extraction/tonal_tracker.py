@@ -8,8 +8,8 @@ import os
 from tqdm import tqdm
 
 from sam_whistle.evaluate.tonal_extraction import tfTreeSet, ActiveSet
-from sam_whistle.model.sam import SAM_whistle
-from sam_whistle.config import TonalConfig, SAMConfig, SpectConfig
+from sam_whistle.model import *
+from sam_whistle.config import *
 from sam_whistle import utils
 from functools import partial
 
@@ -111,11 +111,12 @@ class TonalTracker:
             model.sam_model.prompt_encoder.load_state_dict(torch.load(os.path.join(self.log_dir, 'prompt_encoder.pth')))
 
         # Inference
+        model.eval()
         spect_map =self.spect_map
         pred_mask = np.zeros_like(spect_map)
         weights = np.zeros_like(spect_map)
 
-        block_size = self.spect_cfg.block_size
+        block_size = cfg.spect_cfg.block_size
         start_cols = list(range(0, self.W - block_size + 1, block_size))
         if start_cols[-1] < self.W - block_size:
             start_cols.append(self.W - block_size)
@@ -133,7 +134,116 @@ class TonalTracker:
         
         pred_mask /= weights            
         self.spect_map = pred_mask
+    
+    @torch.no_grad()
+    def dw_inference(self,):
+        assert self.cfg.use_conf, "Not using confidence model"
+        cfg = DWConfig(PatchConfig)
+        model = Detection_ResNet_BN2(cfg.width)
+        model.to(cfg.device)
 
+        # Load model weights
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth')))
+        model.eval()
+
+        # Inferences
+        spect_map =self.spect_map
+        assert spect_map.ndim == 2, "Spectrogram should be 2D"
+        pred_mask = np.zeros_like(spect_map)
+        weights = np.zeros_like(spect_map)
+
+        patch_size = cfg.spect_cfg.patch_size
+        stride = patch_size
+        
+        i_starts = torch.arange(0, self.H - patch_size + 1, stride) 
+        j_starts = torch.arange(0, self.W - patch_size + 1, stride)
+
+        if (self.H - patch_size) % stride != 0:
+            i_starts = torch.cat([i_starts, torch.tensor([self.H - patch_size])])
+
+        if (self.W - patch_size) % stride != 0:
+            j_starts = torch.cat([j_starts, torch.tensor([self.W - patch_size])])
+
+        i_grid, j_grid = torch.meshgrid(i_starts, j_starts, indexing='ij')
+        patch_starts = torch.stack([i_grid.flatten(), j_grid.flatten()], dim=-1)
+
+        for i, j in patch_starts:
+            patch = spect_map[..., i:i+patch_size, j:j+patch_size]
+            patch = torch.tensor(patch).unsqueeze(0).to(cfg.device)
+            patch = patch.unsqueeze(0)
+            pred = model(patch).cpu().numpy().squeeze()
+            pred_mask[i:i+patch_size, j:j+patch_size] += pred
+            weights[i:i+patch_size, j:j+patch_size] += 1
+        
+        pred_mask /= weights            
+        self.spect_map = pred_mask[::-1, :]
+
+    @torch.no_grad()
+    def fcn_spect_inference(self,):
+        assert self.cfg.use_conf, "Not using confidence model"
+        cfg = FCNSpectConfig(PatchConfig)
+        model = FCN_Spect(cfg)
+        model.to(cfg.device)
+
+        # Load model weights
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth')))
+
+        # Inferences
+        model.eval()
+        spect_map =self.spect_map
+        pred_mask = np.zeros_like(spect_map)
+        weights = np.zeros_like(spect_map)
+
+        block_size = cfg.spect_cfg.block_size
+        start_cols = list(range(0, self.W - block_size + 1, block_size))
+        if start_cols[-1] < self.W - block_size:
+            start_cols.append(self.W - block_size)
+
+        for start in start_cols:
+            end = start + block_size
+            block = spect_map[:, start:end]
+            block = torch.tensor(block).unsqueeze(0).to(cfg.device)
+            block = block.unsqueeze(0)
+            pred = model(block).cpu().numpy().squeeze()
+            pred_mask[::-1, start:end] += pred
+            weights[:, start:end] += 1
+        
+        pred_mask /= weights            
+        self.spect_map = pred_mask
+
+
+    @torch.no_grad()
+    def fcn_encoder_inference(self,):
+        assert self.cfg.use_conf, "Not using confidence model"
+        cfg = FCNEncoderConfig(PatchConfig)
+        model = FCN_encoder(cfg)
+        model.to(cfg.device)
+
+        # Load model weights
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth')))
+
+        # Inferences
+        # model.eval()
+        spect_map =self.spect_map
+        pred_mask = np.zeros_like(spect_map)
+        weights = np.zeros_like(spect_map)
+
+        block_size = cfg.spect_cfg.block_size
+        start_cols = list(range(0, self.W - block_size + 1, block_size))
+        if start_cols[-1] < self.W - block_size:
+            start_cols.append(self.W - block_size)
+
+        for start in start_cols:
+            end = start + block_size
+            block = spect_map[:, start:end]
+            block = torch.tensor(block).unsqueeze(0).to(cfg.device)
+            block = block.unsqueeze(0)
+            pred = model(block).cpu().numpy().squeeze()
+            pred_mask[::-1, start:end] += pred
+            weights[:, start:end] += 1
+        
+        pred_mask /= weights            
+        self.spect_map = pred_mask
 
     def _select_peaks(self, spectrum, method='simple', thre = 0.5):
         """Detect peaks based on SNR and other criteria, handling broadband signals separately.

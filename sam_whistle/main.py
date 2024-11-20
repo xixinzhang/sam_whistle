@@ -13,10 +13,10 @@ from dataclasses import asdict
 
 from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch, custom_collate_fn
 from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
+from sam_whistle.config import FCNSpectConfig, SAMConfig, DWConfig,FCNEncoderConfig
 from sam_whistle.model.fcn_patch import weights_init_He_normal
 from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
-from sam_whistle.config import FCNSpectConfig, SAMConfig, DWConfig
-from sam_whistle.evaluate.eval_conf import evaluate_sam_prediction, evaluate_deep_prediction, evaluate_fcn_spect_prediction
+from sam_whistle.evaluate.eval_conf import *
 from sam_whistle.utils.visualize import visualize_array
 
 def run_sam(cfg: SAMConfig):
@@ -171,9 +171,9 @@ def run_deep_whistle(cfg: DWConfig):
             min_test_loss = test_loss
             
             if it < cfg.iter_num:
-                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_dw.pth'))
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model.pth'))
             else:
-                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_dw_more.pth'))
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_more.pth'))
         writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 
@@ -216,29 +216,28 @@ def run_fcn_spect(cfg: FCNSpectConfig):
     it = 0
     epoch = 0
     # Train model
+    batch_num = model.patch_num / cfg.dw_batch
     while it < cfg.iter_num_more: 
         batch_losses = []
         model.train()
         batch_loss = 0
         for i, data in enumerate(trainloader):
-            it += model.patch_num
+            it += batch_num
+            pbar.update(int(batch_num))
             img, mask = data['img'], data['mask']
             img = img.to(cfg.device)
             mask = mask.to(cfg.device)
             pred = model(img)
-            batch_loss += loss_fn(pred, mask) / cfg.batch_size
+            batch_loss += loss_fn(pred, mask) / (batch_num*cfg.batch_size)
             if (i+1) % cfg.batch_size == 0:
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
-                scheduler.step(model.patch_num * cfg.batch_size)
+                scheduler.step(batch_num * cfg.batch_size)
                 batch_losses.append(batch_loss.item())
                 pbar.set_description(f"batch_loss: {batch_loss.item()}")
                 writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
                 batch_loss = 0
-            if it == cfg.iter_num:
-                print("Training complete")
-                break
 
         epoch += 1
         epoch_loss = np.mean(batch_losses)
@@ -254,60 +253,60 @@ def run_fcn_spect(cfg: FCNSpectConfig):
             min_test_loss = test_loss
             
             if it < cfg.iter_num:
-                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_fcn_spect.pth'))
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model.pth'))
             else:
-                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_fcn_spect_more.pth'))
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_more.pth'))
         writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 
-def run_fcn_encoder(args: SAMConfig):
-    """Apply pretrained FCN as encoder kernel to spectrograms(imbalanced patches), followed by a decoder"""
+def run_fcn_encoder(cfg: FCNEncoderConfig):
+    """Apply FCN as encoding kernel to spectrograms(imbalanced patches), followed by a decoder"""
     timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-    if args.exp_name is not None:
-        args.log_dir = os.path.join(args.log_dir, str(timestamp)+"-"+args.exp_name)
+    if cfg.exp_name is not None:
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp)+"-"+cfg.exp_name)
     else:
-        args.log_dir = os.path.join(args.log_dir, str(timestamp))
-    if not os.path.exists(args.log_dir):
-        os.makedirs(args.log_dir)
-    with open(os.path.join(args.log_dir, 'args.txt'), 'w') as f:
-        for arg in vars(args):
-            f.write(f"{arg}: {getattr(args, arg)}\n")
-    writer = SummaryWriter(args.log_dir)
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp))
+    if not os.path.exists(cfg.log_dir):
+        os.makedirs(cfg.log_dir)
+    with open(os.path.join(cfg.log_dir, 'configs.json'), 'w') as f:
+        json.dump(asdict(cfg), f, indent=4)
+    writer = SummaryWriter(cfg.log_dir)
 
-    model = FCN_encoder(args)
-    model.to(args.device)
+    model = FCN_encoder(cfg)
+    model.to(cfg.device)
     loss_fn = DiceLoss()
 
-    if not args.freeze_img_encoder:
-        encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=args.fcn_encoder_lr)
-    if not args.freeze_mask_decoder:
-        decoder_optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.downsample.parameters()), lr=args.fcn_decoder_lr)
+    if not cfg.freeze_img_encoder:
+        encoder_optimizer = optim.AdamW(list(model.img_encoder.parameters())+list(model.bridge.parameters()), lr=cfg.encoder_lr)
+    if not cfg.freeze_mask_decoder:
+        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=cfg.decoder_lr)
 
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(args, 'train', spect_nchan=1)
-    trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=args.num_workers, drop_last=False)
-    testset = WhistleDataset(args, 'test',spect_nchan=1)
-    testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=args.num_workers,)
+    trainset = WhistleDataset(cfg, 'train', spect_nchan=1)
+    trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=cfg.num_workers, drop_last=False, collate_fn= custom_collate_fn)
+    testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
+    
     model.init_patch_ls()
     
-    losses = []
     min_test_loss = torch.inf
     # Train model
-    pbar = tqdm(range(args.fcn_encoder_epochs))
+    pbar = tqdm(range(cfg.epochs))
     for epoch in pbar:
-        epoch_losses = []
+        batch_losses = []
         model.train()
         batch_loss = 0
         for i, data in enumerate(trainloader):
-            spect, mask = data
-            spect = spect.to(args.device)
-            mask = mask.to(args.device)
-            pred = model(spect)
-            batch_loss += loss_fn(pred, mask) / args.spect_batch_size
-            if (i+1) % args.spect_batch_size == 0:
+            img, mask = data['img'], data['mask']
+            img = img.to(cfg.device)
+            mask = mask.to(cfg.device)
+            pred = model(img)
+
+            batch_loss += loss_fn(pred, mask) / cfg.batch_size
+            if (i+1) % cfg.batch_size == 0:
                 encoder_optimizer.zero_grad()
                 decoder_optimizer.zero_grad()
                 batch_loss.backward()
@@ -315,36 +314,24 @@ def run_fcn_encoder(args: SAMConfig):
                 torch.nn.utils.clip_grad_norm_(model.decoder.parameters(), max_norm=1.0)
                 encoder_optimizer.step()
                 decoder_optimizer.step()
-                epoch_losses.append(batch_loss.item())
+                batch_losses.append(batch_loss.item())
                 pbar.set_description(f"batch_loss: {batch_loss.item()}")
-                writer.add_scalar('Loss/train', batch_loss.item(), epoch*len(trainloader) + i)
+                writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
                 batch_loss = 0
 
-
-        losses.append(epoch_losses)
-        pbar.set_description(f"Epoch {epoch} Loss: {np.mean(epoch_losses)}")
-
-        # Test model and save Model
-        # model.eval() # not needed as batch size is 1, batch norm is unstable
-        test_losses = []
-        for i, data in enumerate(testloader):
-            with torch.no_grad():
-                spect, mask = data
-                spect = spect.to(args.device)
-                mask = mask.to(args.device)
-                pred = model(spect)
-                test_loss = loss_fn(pred, mask)
-                test_losses.append(test_loss.item())
-        test_loss = np.mean(test_losses)
+        epoch_loss = np.mean(batch_losses)
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss}")
+        writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
+        
+        # Test model and save Model 
+        test_loss= evaluate_fcn_encoder_prediction(cfg, False, model, testloader, loss_fn)
         writer.add_scalar('Loss/test', test_loss, epoch)
-        # grid = vutils.make_grid(torch.cat((pred[:8], mask[:8]), dim=0), normalize=True, nrow=4, padding=2)
-        # writer.add_image('Mask', grid, epoch)
-        print(f"Test Loss: {test_loss}")
-        # test_loss = np.mean(epoch_losses)
+
         if test_loss < min_test_loss:
             print(f"Saving best model with test loss {test_loss} at epoch {epoch}")
             min_test_loss = test_loss
-            torch.save(model.state_dict(), os.path.join(args.log_dir, 'model.pth'))
+            torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model.pth'))
+        writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 
 
@@ -362,7 +349,8 @@ if __name__ == "__main__":
     elif args.model == 'fcn_spect':
         cfg = tyro.cli(FCNSpectConfig, args=remaining)
         run_fcn_spect(cfg)
-    # elif args.model == 'fcn_encoder':
-    #     run_fcn_encoder(cfg)
+    elif args.model == 'fcn_encoder':
+        cfg = tyro.cli(FCNEncoderConfig, args=remaining)
+        run_fcn_encoder(cfg)
     else:
         raise ValueError("Model not recognized")

@@ -26,6 +26,11 @@ def eval_graph_search(cfg: TonalConfig, model='sam'):
         tracker = TonalTracker(cfg, stem)
         if model == 'sam':
             tracker.sam_inference()
+        elif model == 'deep':
+            tracker.dw_inference()
+        elif model is None:
+            pass
+
         tracker.build_graph()
         tonals = tracker.get_tonals()
         res = tracker.compare_tonals()
@@ -66,5 +71,9 @@ def eval_graph_search(cfg: TonalConfig, model='sam'):
 
 
 if __name__ == "__main__":
-    cfg = tyro.cli(TonalConfig)
-    eval_graph_search(cfg)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', default=None, type=str)
+    args, remainings = parser.parse_known_args()
+    cfg = tyro.cli(TonalConfig, args=remainings)
+    eval_graph_search(cfg, model = args.model)

@@ -37,98 +37,6 @@ class PatchConfig(SpectConfig):
     cached_patches: bool = False
     balance_patches: bool = True
 
-@dataclass
-class DWConfig:
-    # data
-    spect_cfg: PatchConfig
-    root_dir: str = 'data/dclde'
-    meta_file: str = 'meta.json'
-    all_data: bool = False
-    preprocess: bool = False
-
-    debug: bool = False
-    exp_name: Optional[str] = "deep_whistle"
-    log_dir: str = 'logs'
-
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    num_workers:int = 8
-    visualize_eval: bool = False
-    width: int = 32
-    lr: float = 1e-3
-    batch_size: int = 64
-    adam_decay: float = 0.00001
-    scheduler_gamma: float = 0.1
-    scheduler_stepsize:int = 250000
-    iter_num: int = 600000
-    iter_num_more: int = 1200000
-
-@dataclass
-class FCNSpectConfig:
-    spect_cfg: PatchConfig
-    # data
-    root_dir: str = 'data/dclde'
-    meta_file: str = 'meta.json'
-    all_data: bool = False
-    preprocess: bool = False
-
-    debug: bool = False
-    exp_name: Optional[str] = "fcn_spect"
-    log_dir: str = 'logs'
-
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    num_workers:int = 8
-    visualize_eval: bool = False
-    width: int = 32
-    lr: float = 1e-3
-    spect_batch = 2048
-    batch_size: int = 2
-    adam_decay: float = 0.00001
-    scheduler_gamma: float = 0.1
-    scheduler_stepsize:int = 250000
-    iter_num: int = 600000
-    iter_num_more: int = 1200000
-
-    random_patch_order: bool = False
-    fcn_spect_epochs: int = 100
-    slide_mean: bool = False
-
-@dataclass
-class Args:
-    project: Optional[str] = None
-
-    # cut to patches
-    patch:bool = True
-
-    # promt
-    num_pos_points: int=10
-    num_neg_points: int=30
-    box_pad: Optional[int] = 5  # 3
-    thickness: Optional[int] = 3  # 3
-    sample_points: Literal["random", "box"] = 'box'
-    
-
-    # Model
-    ann_iters: int = 10
-
-    # SAM Training
-
-    
-    # PU Model & Training
-    pu_model_path: str = '/home/asher/Desktop/projects/sam_whistle/logs/10-06-2024_15-20-41_pu/model_pu.pth'
-
-    # FCN spect
-
-
-    # FCN Encoder
-    fcn_encoder_lr: float = 1e-4
-    fcn_decoder_lr: float = 1e-3
-    fcn_encoder_epochs: int = 100
-
-
-    # Evaluation
-    evaluate: bool = False
-    visualize_eval: bool = False
-    single_eval: bool = True
 
 @dataclass
 class SAMConfig:
@@ -159,6 +67,82 @@ class SAMConfig:
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5
     loss_fn: Literal["mse", "dice", "bce_logits"] = 'dice'
+
+
+@dataclass
+class DWConfig:
+    # data
+    spect_cfg: PatchConfig
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = "deep_whistle"
+    log_dir: str = 'logs'
+
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_workers:int = 8
+    width: int = 32
+    lr: float = 1e-3
+    batch_size: int = 64
+    adam_decay: float = 0.00001
+    scheduler_gamma: float = 0.1
+    scheduler_stepsize:int = 250000
+    iter_num: int = 600000
+    iter_num_more: int = 1200000
+
+@dataclass
+class FCNSpectConfig:
+    spect_cfg: PatchConfig
+    # data
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = "fcn_spect"
+    log_dir: str = 'logs'
+
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_workers:int = 8
+    width: int = 32
+    lr: float = 1e-3
+    dw_batch = 64
+    batch_size: int = 2
+    adam_decay: float = 0.00001
+    scheduler_gamma: float = 0.1
+    scheduler_stepsize:int = 250000
+    iter_num: int = 600000
+    iter_num_more: int = 1200000
+    random_patch_order: bool = False
+
+@dataclass
+class FCNEncoderConfig:
+    spect_cfg: PatchConfig
+    # data
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    preprocess: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = "fcn_encoder"
+    log_dir: str = 'logs'
+
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_workers:int = 8
+    width: int = 32
+    lr: float = 1e-3
+    batch_size: int = 2
+
+    encoder_lr: float = 1e-4
+    decoder_lr: float = 1e-3
+    epochs: int = 50
+    freeze_img_encoder: bool = False
+    freeze_mask_decoder: bool = False
 
 
 @dataclass
