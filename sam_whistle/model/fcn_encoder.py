@@ -17,7 +17,6 @@ class FCN_encoder(nn.Module):
         self.patch_size = cfg.spect_cfg.patch_size
 
         self.img_encoder = Detection_ResNet_BN2(cfg.width)
-        # self._load_fcn_ckpt()
         self.bridge = nn.Sequential(
                 nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=2),
                 nn.BatchNorm2d(32),
@@ -71,15 +70,15 @@ class FCN_encoder(nn.Module):
 
         patch_size = self.patch_size
         patch_count = torch.zeros_like(input_spect)
-        pred_image = torch.zeros_like(input_spect)
+        image_encoding = torch.zeros_like(input_spect)
 
-        patches = torch.cat([spect[..., i:i+patch_size, j:j+patch_size] for i, j in self.patch_starts], dim=0)
-        patches_pred = self.fcn(patches)
+        patches = torch.cat([input_spect[..., i:i+patch_size, j:j+patch_size] for i, j in self.patch_starts], dim=0)
+        patches_feat = self.img_encoder(patches)
         for idx, (i, j) in enumerate(self.patch_starts):
-            pred_image[..., i:i+patch_size, j:j+patch_size] += patches_pred[idx]
+            image_encoding[..., i:i+patch_size, j:j+patch_size] += patches_feat[idx]
             patch_count[..., i:i+patch_size, j:j+patch_size] += 1
         
-        spect_feat = pred_image / patch_count # (B, 1, 1024, 1024)
+        spect_feat = image_encoding / patch_count # (B, 1, 1024, 1024)
         encoding = self.bridge(spect_feat)
 
         mask_logits = self.decoder(encoding) # input should be (B, 256, 64, 64)

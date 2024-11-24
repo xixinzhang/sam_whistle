@@ -82,11 +82,11 @@ def run_sam(cfg: SAMConfig):
             encoder_optimizer.step()
             decoder_optimizer.step()
             batch_losses.append(batch_loss.item())
-            pbar.set_description(f"batch_loss: {batch_loss.item()}")
+            pbar.set_description(f"batch_loss: {batch_loss.item():.4f}")
             writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
 
         epoch_loss = np.mean(batch_losses)
-        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss}")
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model
@@ -159,7 +159,7 @@ def run_deep_whistle(cfg: DWConfig):
                 break
         epoch += 1
         epoch_loss = np.mean(batch_losses)
-        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss}")
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model
@@ -235,13 +235,13 @@ def run_fcn_spect(cfg: FCNSpectConfig):
                 optimizer.step()
                 scheduler.step(batch_num * cfg.batch_size)
                 batch_losses.append(batch_loss.item())
-                pbar.set_description(f"batch_loss: {batch_loss.item()}")
+                pbar.set_description(f"batch_loss: {batch_loss.item():.4f}")
                 writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
                 batch_loss = 0
 
         epoch += 1
         epoch_loss = np.mean(batch_losses)
-        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss}")
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model
@@ -315,12 +315,12 @@ def run_fcn_encoder(cfg: FCNEncoderConfig):
                 encoder_optimizer.step()
                 decoder_optimizer.step()
                 batch_losses.append(batch_loss.item())
-                pbar.set_description(f"batch_loss: {batch_loss.item()}")
+                pbar.set_description(f"batch_loss: {batch_loss.item():.4f}")
                 writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
                 batch_loss = 0
 
         epoch_loss = np.mean(batch_losses)
-        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss}")
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
         writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
         
         # Test model and save Model 

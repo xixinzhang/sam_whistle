@@ -1,19 +1,29 @@
 ## Segment any whistle using foundational model SAM
 
 ## Install
+```
+conda create -n sam_whistle python=3.12
+conda activate sam_whistle
+pip install -e .
+git submodule add --force https://github.com/facebookresearch/segment-anything
+pip install -e ./segment-anything/
+```
 `conda install ffmpeg`
 
 
 ## Data processing
 no skeleton, no crop
 ```shell
- python sam_whistle/datasets/dataset.py --preprocess
+python sam_whistle/datasets/dataset.py --preprocess --all_data --spect_cfg.block_multi 1
 ```
 
 ## Training & Inference
 training
 ```shell
- python sam_whistle/main.py --model sam_whistle 
+python sam_whistle/main.py --model sam --spect_cfg.block_multi 10 --batch_size 8 --device cuda:0
+python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:1
+python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 8 --device cuda:2
+python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 8 --device cuda:3
 ```
 inference
 ```shell

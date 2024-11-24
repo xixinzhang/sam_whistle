@@ -10,10 +10,8 @@ import tyro
 import matplotlib.pyplot as plt
 import json
 from tqdm import tqdm
-import lmdb
 import pickle
 import random
-import os 
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from sam_whistle import utils, config
@@ -41,7 +39,7 @@ class WhistleDataset(Dataset):
         self.root_dir = Path(self.cfg.root_dir)
         self.processed_dir = self.root_dir / 'processed'    
         self.audio_dir = self.root_dir / 'audio'
-        self.anno_dir = self.root_dir / 'annotation'
+        self.anno_dir = self.root_dir / 'anno'
         self.meta_file = self.root_dir / self.cfg.meta_file
         self.meta = self._get_dataset_meta()
         self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
@@ -209,7 +207,7 @@ class WhistleDataset(Dataset):
         """
         data = {}
         for i, stem in enumerate(self.meta):
-            spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt')
+            spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt', weights_only=False)
             gt_mask = np.load(self.processed_dir / f'{self.split}/{stem}/mask.npy')
             assert gt_mask.ndim == 2, 'mask should be 2D as input to cv2.dilate'
             # Get gt mask from annotation

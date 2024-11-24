@@ -14,7 +14,7 @@ class SpectConfig:
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
-    amin: float = 1e-15
+    amin: float = 1e-20
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -51,7 +51,7 @@ class SAMConfig:
     exp_name: Optional[str] = "sam"
     log_dir: str = 'logs'
 
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = 'cuda:0'
     model_type: str = 'vit_b'
     ckpt_dir: str = 'sam_checkpoints'
     sam_decoder: bool = False
@@ -82,7 +82,7 @@ class DWConfig:
     exp_name: Optional[str] = "deep_whistle"
     log_dir: str = 'logs'
 
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = 'cuda:0'
     num_workers:int = 8
     width: int = 32
     lr: float = 1e-3
@@ -106,7 +106,7 @@ class FCNSpectConfig:
     exp_name: Optional[str] = "fcn_spect"
     log_dir: str = 'logs'
 
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = 'cuda:0'
     num_workers:int = 8
     width: int = 32
     lr: float = 1e-3
@@ -132,7 +132,7 @@ class FCNEncoderConfig:
     exp_name: Optional[str] = "fcn_encoder"
     log_dir: str = 'logs'
 
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = 'cuda:0'
     num_workers:int = 8
     width: int = 32
     lr: float = 1e-3

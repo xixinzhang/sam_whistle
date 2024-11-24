@@ -8,7 +8,6 @@ import numpy as np
 import tyro
 from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
-from tqdm import tqdm
 from dataclasses import dataclass, asdict
 
 
@@ -65,7 +64,7 @@ def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = Non
     test_losses = []
     all_gts = []
     all_preds = []
-    for i, data in enumerate(tqdm(testloader)):
+    for i, data in enumerate(testloader):
         spect, gt_mask = data['img'], data['mask']
         spect = spect.to(cfg.device)
         gt_mask = gt_mask.to(cfg.device)
@@ -113,7 +112,7 @@ def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = Non
     batch_losses = []
     all_gts = []
     all_preds = []
-    for i, data in enumerate(tqdm(testloader)):
+    for i, data in enumerate(testloader):
         img, mask = data['img'], data['mask']
         img = img.to(cfg.device)
         mask = mask.to(cfg.device)
@@ -157,7 +156,7 @@ def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Sp
     batch_losses = []
     all_gts = []
     all_preds = []
-    for i, data in enumerate(tqdm(testloader)):
+    for i, data in enumerate(testloader):
         img, mask = data['img'], data['mask']
         img = img.to(cfg.device)
         mask = mask.to(cfg.device)
@@ -202,7 +201,7 @@ def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FC
     batch_losses = []
     all_gts = []
     all_preds = []
-    for i, data in enumerate(tqdm(testloader)):
+    for i, data in enumerate(testloader):
         img, mask = data['img'], data['mask']
         img = img.to(cfg.device)
         mask = mask.to(cfg.device)
