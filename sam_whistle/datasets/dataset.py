@@ -75,6 +75,7 @@ class WhistleDataset(Dataset):
                 slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
                 self.train_blocks.extend(slices)
 
+
     def __len__(self):
         if self.split == 'train':
             if not self.debug and self.spect_cfg.block_multi > 1:

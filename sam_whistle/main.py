@@ -277,9 +277,9 @@ def run_fcn_encoder(cfg: FCNEncoderConfig):
     loss_fn = DiceLoss()
 
     if not cfg.freeze_img_encoder:
-        encoder_optimizer = optim.AdamW(list(model.img_encoder.parameters())+list(model.bridge.parameters()), lr=cfg.encoder_lr)
+        encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=cfg.encoder_lr)
     if not cfg.freeze_mask_decoder:
-        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=cfg.decoder_lr)
+        decoder_optimizer = optim.AdamW(list(model.bridge.parameters())+list(model.decoder.parameters()), lr=cfg.decoder_lr)
 
 
     # Load data
