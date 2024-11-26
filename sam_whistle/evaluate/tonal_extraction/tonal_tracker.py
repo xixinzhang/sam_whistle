@@ -1,4 +1,5 @@
 from collections import deque
+from matplotlib import pyplot as plt
 import numpy as np
 from pathlib import Path
 from scipy.interpolate import interp1d
@@ -27,15 +28,15 @@ class TonalTracker:
         self.audio_dir = Path(cfg.root_dir) / 'audio'
         self.anno_dir = Path(cfg.root_dir) / 'annotation'
         self.hop_s = self.spect_cfg.hop_ms / 1000
-        self.spect_map, self.spect_snr = self._load_spectrogram(stem)
+        self.block_size = self.cfg.spect_cfg.block_size
+        self.spect_map, self.spect_snr = self._load_spectrogram(stem)  # [H, W]
         self.gt_tonals = self._load_gt_tonals(stem)
-        self.H, self.W = self.spect_map.shape[-2:]
         # search parameters
         self.pre_peak_num = 0.25 * self.H
         self.maxslope_Hz_per_ms = self.cfg.maxslope_Hz_per_ms
         self.activeset_s = self.cfg.activeset_s
-        self.minlen_s = self.cfg.minlen_s
-        self.maxgap_s = self.cfg.maxgap_s
+        self.minlen_s = self.cfg.minlen_ms / 1000
+        self.maxgap_s = self.cfg.maxgap_ms / 1000
         # initialize
         self.current_win_idx = 0
         self.start_s = self.cfg.start_s
@@ -43,9 +44,11 @@ class TonalTracker:
         self.current_peaks = []
         self.current_peaks_freq = []
         if self.cfg.use_conf:
-            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.cfg.thre_norm)
+            self.thre = self.cfg.thre_norm
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.thre )
         else:
-            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.cfg.thre)
+            self.thre = self.cfg.thre
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.thre )
         self.active_set = ActiveSet()
         self.active_set.setResolutionHz(self.freq_bin)
         self.detected_tonals = None
@@ -73,16 +76,21 @@ class TonalTracker:
         # to match the marie's implementation, set the center to False
         spect_power_db= utils.wave_to_spect(waveform, sample_rate, center = True, **vars(self.cfg.spect_cfg))
         spect_power_db = spect_power_db[0].numpy() # (freq, time)
+        
+        self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
             spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
         
-        H, W = spect_power_db.shape[-2:]
+        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db), axis=0)
+        self.H, self.W = spect_power_db.shape[-2:]
         spect_snr = np.zeros_like(spect_power_db)
-        block_size = self.cfg.spect_cfg.block_size
-        for i in range(0, W, block_size):
-            spect_snr[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, H * self.cfg.broadband)
+        block_size = self.block_size
+        for i in range(0, self.W, block_size):
+            spect_snr[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, self.H * self.cfg.broadband)
         print(f'Loaded spectrogram from {stem}: {spect_power_db.shape}')
         
+        self.start_cols = self._get_blocks()
+
         if self.cfg.use_conf:
             spect_power_db = np.flip(spect_power_db, axis=0)
             spect_power_db = utils.normalize_spect(spect_power_db)
@@ -95,7 +103,15 @@ class TonalTracker:
         bin_file = self.anno_dir/ f'{stem}.bin'
         gt_tonals = utils.load_annotation(bin_file)
         return gt_tonals
-
+    
+    def _get_blocks(self,):
+        block_size = self.block_size
+        start_cols = list(range(0, self.W - block_size + 1, block_size))
+        if start_cols[-1] < self.W - block_size:
+            start_cols.append(self.W - block_size)
+        
+        return start_cols
+    
     @torch.no_grad()
     def sam_inference(self,):
         assert self.cfg.use_conf, "Not using confidence model"
@@ -117,9 +133,7 @@ class TonalTracker:
         weights = np.zeros_like(spect_map)
 
         block_size = cfg.spect_cfg.block_size
-        start_cols = list(range(0, self.W - block_size + 1, block_size))
-        if start_cols[-1] < self.W - block_size:
-            start_cols.append(self.W - block_size)
+        start_cols = self.start_cols
 
         for start in start_cols:
             end = start + block_size
@@ -127,8 +141,6 @@ class TonalTracker:
             block = torch.tensor(block).unsqueeze(0).to(cfg.device)
             block = torch.cat([block, block, block], axis=0).unsqueeze(0)
             pred = model(block).cpu().numpy().squeeze()
-            if self.cfg.debug:
-                utils.visualize_array(block, mask=(pred >0.5).astype(int), random_colors=False, mask_alpha=1, filename=f'{start}.png', save_dir=f'outputs/debug/{stem}')
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
         
@@ -143,7 +155,7 @@ class TonalTracker:
         model.to(cfg.device)
 
         # Load model weights
-        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth')))
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device))
         model.eval()
 
         # Inferences
@@ -186,8 +198,7 @@ class TonalTracker:
         model.to(cfg.device)
 
         # Load model weights
-        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth')))
-
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device))
         # Inferences
         model.eval()
         spect_map =self.spect_map
@@ -195,10 +206,10 @@ class TonalTracker:
         weights = np.zeros_like(spect_map)
 
         block_size = cfg.spect_cfg.block_size
-        start_cols = list(range(0, self.W - block_size + 1, block_size))
-        if start_cols[-1] < self.W - block_size:
-            start_cols.append(self.W - block_size)
-
+        start_cols = self.start_cols
+        
+        model.init_patch_ls((spect_map.shape[-2], block_size))
+        
         for start in start_cols:
             end = start + block_size
             block = spect_map[:, start:end]
@@ -232,6 +243,8 @@ class TonalTracker:
         start_cols = list(range(0, self.W - block_size + 1, block_size))
         if start_cols[-1] < self.W - block_size:
             start_cols.append(self.W - block_size)
+        
+        model.init_patch_ls()
 
         for start in start_cols:
             end = start + block_size
@@ -463,7 +476,7 @@ class TonalTracker:
                 all_dura.append(gt_dura)
                 all_excess_s.append(excess_s)
                 # print(f'gt_idx: {gt_idx}, covered_s: {covered_s}, excess_s: {excess_s}, deviations: {gt_deviation}')
-        
+
         res = {
             # dt
             'dt_false_pos_all': dt_false_pos_all,

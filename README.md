@@ -20,29 +20,30 @@ python sam_whistle/datasets/dataset.py --preprocess --all_data --spect_cfg.block
 ## Training & Inference
 training
 ```shell
-python sam_whistle/main.py --model sam --spect_cfg.block_multi 10 --batch_size 8 --device cuda:0
-python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:1
-python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 8 --device cuda:2
-python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 8 --device cuda:3
+python sam_whistle/main.py --model sam --spect_cfg.block_multi 10 --batch_size 2 --device cuda:0
+python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:0
+python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0
+python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0
 ```
 inference
 ```shell
 ```
 ## evaluation
-1. pixel-wise
+1. pixel-level
    ```shell
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model deep --log_dir logs/10-06-2024_15-20-41_pu --min_thre 0.01 --max_thre 0.95
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model sam --log_dir logs/11-16-2024_23-45-27
-   python sam_whistle/evaluate/evaluate.py --no_single_eval
+   python sam_whistle/evaluate/eval_conf.py --eval_single --model sam --log_dir logs/11-23-2024_15-19-19-sam
+   python sam_whistle/evaluate/eval_conf.py --eval_single --model deep --log_dir logs/11-23-2024_15-27-33-deep_whistle
+   python sam_whistle/evaluate/eval_conf.py --eval_single --model fcn_spect --log_dir logs/11-23-2024_15-39-59-fcn_spect
+   python sam_whistle/evaluate/eval_conf.py --eval_single --model fcn_encoder --log_dir logs/11-24-2024_03-02-50-fcn_encoder
    ```
-2. tone-wise
+2. tonal-wise
    1. extract tonal
         ```shell
-        python sam_whistle/evaluate/tonal_extraction/tonal_tracker.py --spect_cfg.crop
+        python sam_whistle/evaluate/tonal_extraction/tonal_tracker.py
         ```
    2. evaluate
       ```shell
-      python sam_whistle/evaluate/eval_tonal.py --use_conf --log_dir logs/11-16-2024_23-45-27
+      python sam_whistle/evaluate/eval_tonal.py --use_conf --log_dir logs/11-16-2024_09-28-58  --model sam # 1e-10
       ```
 ## Acknowledgement
 - [segment-anything](https://github.com/facebookresearch/segment-anything)

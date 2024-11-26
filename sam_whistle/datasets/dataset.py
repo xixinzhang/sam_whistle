@@ -73,6 +73,12 @@ class WhistleDataset(Dataset):
             for i, stem in enumerate(self.meta):
                 n_blocks = self.spect_lens[i] // self.spect_cfg.block_size
                 slices = [(i, slice(j*self.spect_cfg.block_size, (j+1)*self.spect_cfg.block_size)) for j in range(n_blocks)]
+                if self.cfg.spect_cfg.balance_blocks:
+                    res = []
+                    for i, s in slices:
+                        if self.data[i]['mask'][..., s].sum() > 0:
+                            res.append((i, s))
+                        slices = res
                 self.train_blocks.extend(slices)
 
 
@@ -176,27 +182,12 @@ class WhistleDataset(Dataset):
     def _get_gt_masks(self, shape, contours, interp='linear'):
         """"Get binary mask from each contour"""
         # extract mask from contours
-        mask= np.zeros(shape)
+        mask= np.zeros(shape, dtype=np.uint8)
         for i, contour in enumerate(contours):
-            x, y = contour[:, 0], contour[:, 1]
-            x_min, x_max = x.min(), x.max()
-            x_order = np.argsort(x)
-            x = x[x_order]
-            y = y[x_order]
-
-            length = len(x)
-            if self.spect_cfg.origin_annos:
-                new_x = x
-                new_y = y
-            else:
-                new_x = np.linspace(x_min, x_max, length*10, endpoint=True)
-                new_y = utils.interpolate_anno_point(new_x, x, y, interp)
-            
+            new_x, new_y = utils.get_dense_anno_points(contour, origin=self.spect_cfg.origin_annos ,interp=interp)
             new_x = np.maximum(0, np.minimum(new_x, shape[-1]-1)).astype(int)
             new_y = np.maximum(0, np.minimum(new_y, shape[-2]-1)).astype(int)
-
-            for y, x in zip(new_y, new_x):
-                mask[y, x] = 1
+            mask[new_y, new_x] = 1
         return  mask
     
     def _get_data(self):

@@ -14,7 +14,7 @@ class SpectConfig:
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
-    amin: float = 1e-20
+    amin: float = 1e-10
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -29,6 +29,8 @@ class SpectConfig:
     skeleton: bool = False
     interp: Literal["linear", "polynomial", "spline"] = 'linear'
     origin_annos: bool = False
+    
+    balance_blocks: bool = False
 
 @dataclass
 class PatchConfig(SpectConfig):
@@ -166,8 +168,6 @@ class TonalConfig:
     maxslope_Hz_per_ms: int = 1000
     activeset_s: float = 0.05
     peak_dis: int = 2
-    minlen_s: float = minlen_ms/1000
-    maxgap_s: float = maxgap_ms/1000
     disambiguate_s: float = 0.3
     broadband:float = 0.01
 
@@ -181,6 +181,8 @@ class TonalConfig:
 
     # model
     log_dir: Optional[str]= None
+    
+    visualize: bool = False
 
 if __name__ == '__main__':
     args = tyro.cli(SAMConfig)
