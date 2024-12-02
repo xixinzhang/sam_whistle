@@ -19,19 +19,6 @@ from sam_whistle.config import SAMConfig, DWConfig, FCNSpectConfig, FCNEncoderCo
 from sam_whistle import utils
 from sam_whistle.utils.visualize import visualize
 
-@dataclass
-class EvalResults:
-    model_name: str
-    precision: float  # Average precision
-    recall: float    # At optimal threshold
-    f1: float
-    threshold: float  # Optimal threshold
-    # For plotting PR curve
-    precisions: list[float]  
-    recalls: list[float]
-    thresholds: list[float]
-
-
 @torch.no_grad()
 def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
     if load:
@@ -222,77 +209,52 @@ def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FC
     else:
         return test_loss
 
-def plot_pr_curve(eval_res_li:list, fig_dir:str):
-    
-    plt.figure(figsize=(10, 8))
-    precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), np.linspace(0.01, 1, 100))
-    f1_grid = 2 * (precision_grid * recall_grid) / (precision_grid + recall_grid)
-    f1_contour = plt.contour(recall_grid, precision_grid, f1_grid, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
 
-    for eval_res in eval_res_li:
-        plt.plot(eval_res.recalls, eval_res.precisions, 
-                label=f'{eval_res.model_name} (F1={eval_res.f1:.3f})')
-        plt.scatter(eval_res.recall, eval_res.precision, zorder=5)
-
-    plt.clabel(f1_contour, fmt='%.2f', inline=True, fontsize=10)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curves')
-    plt.legend(loc = 'lower left')
-    plt.grid(True)
-    plt.xticks(np.arange(0, 1.1, 0.1))
-    plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.savefig(os.path.join(fig_dir, 'precision_recall_curve.png'))
-    plt.close()
-
-
-
-def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SAM', visualize_eval=False, visualize_name='', min_thre = 0, max_thre=1):
+def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SAM', visualize_eval=False, visualize_name='', min_thre = 0, max_thre=1, pr_name='pr_curve'):
     test_loss, all_gts, all_preds = eval_fn(cfg, load= True, visualize_eval = visualize_eval, visualize_name=visualize_name)
-    eval_res = utils.evaluate_model(all_gts, all_preds, model_name, min_thre, max_thre)
+    eval_res = utils.eval_conf_map(all_gts, all_preds, model_name, min_thre, max_thre)
     print(f"Test Loss: {test_loss:.3f}")
     print(f"Precision: {eval_res.precision:.3f}, Recall: {eval_res.recall:.3f}, F1: {eval_res.f1:.3f}, Threshold: {eval_res.threshold:.3f}")
     
     with open(os.path.join(cfg.log_dir, f'{model_name}_results.pkl'), 'wb') as f:
         pickle.dump(eval_res, f)
     
-    plot_pr_curve([eval_res], cfg.log_dir)
+    utils.plot_pr_curve([eval_res], cfg.log_dir, figname=f'{pr_name}')
 
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--eval_single', action = 'store_true', help='Evaluate a single model')
-    parser.add_argument('--model', type=str, default='sam_whistle', help='Model to evaluate')
-    parser.add_argument('--model_name', type=str, default='SAM', help='Name of the model')
+    parser.add_argument('--eval_multiple', action = 'store_true', help='Evaluate a single model')
+    parser.add_argument('--model', type=str, default='sam', help='Model to evaluate')
     parser.add_argument('--visual', action = 'store_true', help='Visualize the predictions')
     parser.add_argument('--visual_name', type=str, default='', help='Name of the visualized file')
-    parser.add_argument('--min_thre', type=float, default=0.05, help='Minimum threshold for filtering')
-    parser.add_argument('--max_thre', type=float, default=0.95, help='Maximum threshold for filtering')
+    parser.add_argument('--min_thre', type=float, default=0.01, help='Minimum threshold for filtering')
+    parser.add_argument('--max_thre', type=float, default=0.99, help='Maximum threshold for filtering')
     args, remaining = parser.parse_known_args()
-    if args.eval_single:
+    if not args.eval_multiple:
         if args.model == 'sam':
             cfg = tyro.cli(SAMConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn=evaluate_sam_prediction, model_name=args.model_name, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            evaluate_conf_map(cfg, eval_fn=evaluate_sam_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model == 'deep':
             cfg = tyro.cli(DWConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction, model_name=args.model_name, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model == 'fcn_spect':
             cfg = tyro.cli(FCNSpectConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_spect_prediction, model_name=args.model_name, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_spect_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model=='fcn_encoder':
             cfg = tyro.cli(FCNEncoderConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_encoder_prediction, model_name=args.model_name, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_encoder_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         else:
             raise ValueError(f"Model {args.model} not found")
         
     else:
         eval_results = [
-            'logs/11-23-2024_15-19-19-sam/sam_whistle_results.pkl',
-            'logs/11-23-2024_15-27-33-deep_whistle/deep_whistle_results.pkl',
+            'logs/11-23-2024_15-19-19-sam/sam_results.pkl',
+            'logs/11-23-2024_15-27-33-deep_whistle/deep_results.pkl',
             'logs/11-23-2024_15-39-59-fcn_spect/fcn_spect_results.pkl',
             'logs/11-24-2024_03-02-50-fcn_encoder_imbalance/fcn_encoder_results.pkl'
         ]
         eval_res_li = [pickle.load(open(res_file, 'rb')) for res_file in eval_results]
-        plot_pr_curve(eval_res_li, 'logs')
+        utils.plot_pr_curve(eval_res_li, 'logs')

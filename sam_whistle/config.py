@@ -14,7 +14,8 @@ class SpectConfig:
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
-    amin: float = 1e-10
+    amin: float = 1e-20
+    normalize: str = 'minmax'
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -180,7 +181,7 @@ class TonalConfig:
     ratio_above_snr = 0.3
 
     # model
-    log_dir: Optional[str]= None
+    log_dir: Optional[str]= 'logs'
     
     visualize: bool = False
 

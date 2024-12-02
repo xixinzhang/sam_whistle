@@ -49,8 +49,13 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
     spect_power_db = F.amplitude_to_DB(spec, multiplier=10.0, amin=amin, db_multiplier=0.0, top_db=top_db)
     return spect_power_db # (C, freq, time)
 
-def normalize_spect(spect_db):
-    spect_db = (spect_db - spect_db.min()) / (spect_db.max() - spect_db.min())  # normalize to [0, 1]
+def normalize_spect(spect_db, method='minmax'):
+    if method == 'minmax':
+        spect_db = (spect_db - spect_db.min()) / (spect_db.max() - spect_db.min())  # normalize to [0, 1]
+    elif method == 'zscore':
+        spect_db = (spect_db - spect_db.mean()) / spect_db.std()  # normalize to zscore
+    else:
+        raise ValueError("Invalid normalization method")
     return spect_db
 
 def snr_spect(spect_db, click_thr_db, broadband_thr_n):

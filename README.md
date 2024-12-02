@@ -31,10 +31,10 @@ inference
 ## evaluation
 1. pixel-level
    ```shell
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model sam --log_dir logs/11-23-2024_15-19-19-sam
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model deep --log_dir logs/11-23-2024_15-27-33-deep_whistle
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model fcn_spect --log_dir logs/11-23-2024_15-39-59-fcn_spect
-   python sam_whistle/evaluate/eval_conf.py --eval_single --model fcn_encoder --log_dir logs/11-24-2024_03-02-50-fcn_encoder
+   python sam_whistle/evaluate/eval_conf.py --model sam --log_dir logs/11-23-2024_15-19-19-sam
+   python sam_whistle/evaluate/eval_conf.py --model deep --log_dir logs/11-23-2024_15-27-33-deep_whistle
+   python sam_whistle/evaluate/eval_conf.py --model fcn_spect --log_dir logs/11-23-2024_15-39-59-fcn_spect
+   python sam_whistle/evaluate/eval_conf.py --model fcn_encoder --log_dir logs/11-24-2024_03-02-50-fcn_encoder
    ```
 2. tonal-wise
    1. extract tonal

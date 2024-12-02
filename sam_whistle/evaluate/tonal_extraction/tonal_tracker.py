@@ -7,12 +7,42 @@ import tyro
 import torch
 import os
 from tqdm import tqdm
+from dataclasses import dataclass, field
 
 from sam_whistle.evaluate.tonal_extraction import tfTreeSet, ActiveSet
 from sam_whistle.model import *
 from sam_whistle.config import *
 from sam_whistle import utils
 from functools import partial
+
+@dataclass
+class TonalResults:
+    dt_false_pos_all: int = 0
+    dt_true_pos_all: int = 0
+    dt_true_pos_valid: int = 0
+    # gt 
+    gt_matched_all: int = 0
+    gt_missed_all: int = 0
+    gt_matched_valid: int = 0
+    gt_missed_valid: int = 0
+    #
+    all_deviation: list = field(default_factory=list)
+    all_covered_s:list = field(default_factory=list)
+    all_excess_s:list = field(default_factory=list)
+    all_dura: list = field(default_factory=list)
+
+    def merge(self, other):
+        self.dt_false_pos_all += other.dt_false_pos_all
+        self.dt_true_pos_all += other.dt_true_pos_all
+        self.dt_true_pos_valid += other.dt_true_pos_valid
+        self.gt_matched_all += other.gt_matched_all
+        self.gt_missed_all += other.gt_missed_all
+        self.gt_matched_valid += other.gt_matched_valid
+        self.gt_missed_valid += other.gt_missed_valid
+        self.all_deviation += other.all_deviation
+        self.all_covered_s += other.all_covered_s
+        self.all_excess_s += other.all_excess_s
+        self.all_dura += other.all_dura
 
 
 class TonalTracker:
@@ -37,22 +67,23 @@ class TonalTracker:
         self.activeset_s = self.cfg.activeset_s
         self.minlen_s = self.cfg.minlen_ms / 1000
         self.maxgap_s = self.cfg.maxgap_ms / 1000
+
         # initialize
         self.current_win_idx = 0
         self.start_s = self.cfg.start_s
         self.current_s = self.cfg.start_s
         self.current_peaks = []
         self.current_peaks_freq = []
-        if self.cfg.use_conf:
-            self.thre = self.cfg.thre_norm
-            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.thre )
-        else:
-            self.thre = self.cfg.thre
-            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method, thre = self.thre )
         self.active_set = ActiveSet()
         self.active_set.setResolutionHz(self.freq_bin)
         self.detected_tonals = None
 
+        if self.cfg.use_conf:
+            self.thre = self.cfg.thre_norm
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method)
+        else:
+            self.thre = self.cfg.thre
+            self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method)
         # compare tonals
         self.search_row = self.cfg.peak_tolerance_Hz // self.freq_bin
 
@@ -60,6 +91,15 @@ class TonalTracker:
         if self.cfg.use_conf:
             assert self.cfg.log_dir is not None, "No model to load"
             self.log_dir = Path(self.cfg.log_dir)
+    
+    def reset(self):
+        self.current_win_idx = 0
+        self.current_s = self.cfg.start_s
+        self.current_peaks = []
+        self.current_peaks_freq = []
+        self.active_set = ActiveSet()
+        self.active_set.setResolutionHz(self.freq_bin)
+        self.detected_tonals = None
             
     def _load_spectrogram(self, stem: str):
         """Load original spectrogram from wave file, used for graph search baseline with"""
@@ -81,7 +121,7 @@ class TonalTracker:
         if self.cfg.spect_cfg.crop:
             spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
         
-        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db), axis=0)
+        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize ), axis=0)
         self.H, self.W = spect_power_db.shape[-2:]
         spect_snr = np.zeros_like(spect_power_db)
         block_size = self.block_size
@@ -93,7 +133,7 @@ class TonalTracker:
 
         if self.cfg.use_conf:
             spect_power_db = np.flip(spect_power_db, axis=0)
-            spect_power_db = utils.normalize_spect(spect_power_db)
+            spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize)
             return spect_power_db, spect_snr
         else:
             return spect_snr, spect_snr
@@ -144,7 +184,7 @@ class TonalTracker:
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
         
-        pred_mask /= weights            
+        pred_mask /= weights
         self.spect_map = pred_mask
     
     @torch.no_grad()
@@ -305,8 +345,9 @@ class TonalTracker:
     
 
     def build_graph(self):
+        assert self.thre > 1 if not self.cfg.use_conf else True, "Threshold must be greater than 1"
         while self.current_win_idx < self.W:
-            found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx])
+            found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx], thre=self.thre)
             if found_peaks:
                 self._prune_and_extend()
             self.current_win_idx += 1
@@ -364,7 +405,7 @@ class TonalTracker:
 
         return tonals
 
-    def compare_tonals(self):
+    def compare_tonals(self)-> TonalResults:
         """Compare extracted tonals with ground truth tonals."""
         assert self.detected_tonals is not None, "No detected tonals to compare."
         # GT tonals
@@ -477,24 +518,20 @@ class TonalTracker:
                 all_excess_s.append(excess_s)
                 # print(f'gt_idx: {gt_idx}, covered_s: {covered_s}, excess_s: {excess_s}, deviations: {gt_deviation}')
 
-        res = {
-            # dt
-            'dt_false_pos_all': dt_false_pos_all,
-            'dt_true_pos_all': dt_true_pos_all,
-            'dt_true_pos_valid': dt_true_pos_valid,
-            # gt
-            'gt_matched_all': gt_matched_all,
-            'gt_missed_all': gt_missed_all,
-            'gt_matched_valid': gt_matched_valid,
-            'gt_missed_valid': gt_missed_valid,
-            #
-            'all_deviation': all_deviation,
-            'all_covered_s': all_covered_s,
-            'all_excess_s': all_excess_s,
-            'all_dura': all_dura
-
-        }
-        return res
+        tonal_stats = TonalResults(
+            dt_false_pos_all = len(dt_false_pos_all),
+            dt_true_pos_all = len(dt_true_pos_all),
+            dt_true_pos_valid = len(dt_true_pos_valid),
+            gt_matched_all = len(gt_matched_all),
+            gt_missed_all = len(gt_missed_all),
+            gt_matched_valid = len(gt_matched_valid),
+            gt_missed_valid = len(gt_missed_valid),
+            all_deviation = all_deviation,
+            all_covered_s = all_covered_s,
+            all_excess_s = all_excess_s,
+            all_dura = all_dura
+        )
+        return tonal_stats
 
 
 
@@ -505,13 +542,20 @@ if __name__ == "__main__":
     # stem = 'Qx-Dc-SC03-TAT09-060516-173000'
     # stem = 'QX-Dc-FLIP0610-VLA-061015-165000'
     # stem = 'Qx-Dc-CC0411-TAT11-CH2-041114-154040-s'
-    cfg = tyro.cli(TonalConfig)
-    tracker = TonalTracker(cfg, stem)
-    tracker.sam_inference()
-    tracker.build_graph()
-    tonals = tracker.get_tonals()
-    # print(tonals[0])
-    res = tracker.compare_tonals()
-    for k, v in res.items():
-        print(f'{k}: {len(v)}')
+    for stem in ['Qx-Dd-SCI0608-N1-060814-150255']:
+        cfg = tyro.cli(TonalConfig)
+        tracker = TonalTracker(cfg, stem)
+        # tracker.sam_inference()
+        for thre in [9.5, 10]:
+            tracker.reset()
+            tracker.thre = thre
+            tracker.build_graph()
+            tonals = tracker.get_tonals()
+            # print(tonals[0])
+            res = tracker.compare_tonals()
+            for k, v in asdict(res).items():
+                if isinstance(v, list):
+                    print(f'{k}: {len(v)}')
+                else:
+                    print(f'{k}: {v}')
 

@@ -210,7 +210,7 @@ class WhistleDataset(Dataset):
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
 
-            spect = utils.normalize_spect(spect)
+            spect = utils.normalize_spect(spect, self.spect_cfg.normalize)
             if self.spect_cfg.crop:
                 spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
                 gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
