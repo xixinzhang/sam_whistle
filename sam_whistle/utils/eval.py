@@ -99,7 +99,7 @@ def eval_conf_map(y_true: np.ndarray,
     )
 
 def eval_tonal_map(pr, model_name):
-    precisions, recalls, thresholds = map(np.array, zip(*pr['all']),)
+    precisions, recalls, thresholds = map(np.array, zip(*pr),)
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
     optimal_idx = np.argmax(f1_scores)
     optimal_threshold = thresholds[optimal_idx]

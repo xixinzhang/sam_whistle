@@ -1,6 +1,6 @@
 import struct 
 import numpy as np
-from scipy.interpolate import interp1d, splev, splrep
+from scipy.interpolate import interp1d, splev, splrep, LSQUnivariateSpline
 from numpy.polynomial import Polynomial
 import cv2
 from skimage.morphology import skeletonize
@@ -59,8 +59,10 @@ def interpolate_anno_points(new_x, x, y, interp="linear"):
         poly_interp = Polynomial.fit(x, y, 3)
         new_y = poly_interp(new_x)
     elif interp == "spline":
-        splline_interp = splrep(x, y, k=3)
-        new_y = splev(new_x, splline_interp)
+        n = 8
+        knots = x[n:-n:n]
+        spline = LSQUnivariateSpline(x, y, t=knots)
+        new_y = spline(new_x)
     else:
         raise ValueError("Interpolation method not supported")
     return new_y
@@ -92,6 +94,14 @@ def get_colored_tonal_map(shape, contours, interp='linear', origin=False):
         mask[new_y, new_x] = c
     return mask
 
+def get_tonal_mask(shape, contours, interp='linear', origin=False):
+    mask = np.zeros(shape)
+    for i, contour in enumerate(contours):
+        new_x, new_y = get_dense_anno_points(contour, origin= origin, interp=interp)
+        new_x = np.maximum(0, np.minimum(new_x, shape[-1]-1)).astype(int)
+        new_y = np.maximum(0, np.minimum(new_y, shape[-2]-1)).astype(int)
+        mask[new_y, new_x] = i + 1
+    return mask
 
 def dilate_mask(mask, kernel_size=3):
     """dilate the mask"""

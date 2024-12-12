@@ -48,7 +48,7 @@ class WhistleDataset(Dataset):
         self.spect_nchan = spect_nchan
 
         if self.cfg.preprocess:
-            self._preprocess()
+            self._preprocess(cfg.save_pre)
         else:
             # check if all files are processed
             for stem in self.meta:
@@ -137,11 +137,11 @@ class WhistleDataset(Dataset):
         return meta[self.split]
         
         
-    def _preprocess(self):
+    def _preprocess(self, save = True):
         for stem in self.meta:
-            self._wave_to_data(stem, empty=True)
+            spec_power_db, gt_mask = self._wave_to_data(stem, save=save)
 
-    def _wave_to_data(self, stem, empty=False):
+    def _wave_to_data(self, stem,save=True):
         """process one audio file to spectrogram images and get annotations"""
         # spcet
         audio_file = self.audio_dir / f'{stem}.wav'
@@ -167,17 +167,18 @@ class WhistleDataset(Dataset):
         gt_mask = self._get_gt_masks(shape, spec_annos, interp=self.interp)
         
         # save spec and annotation
-        if empty:
+        if save:
             path = self.processed_dir / f'{self.split}/{stem}'
             if path.exists():
                 shutil.rmtree(path)
             path.mkdir(parents=True, exist_ok=True)
+            torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
+            np.save(self.processed_dir / f'{self.split}/{stem}/mask.npy', gt_mask)
+
         print(f'Loaded spectrogram from {stem}.wav, shape: {spec_power_db.shape}, min: {spec_power_db.min():.2f}, max: {spec_power_db.max():2f}')
         print(f'Loaded mask from {stem}.bin, shape: {gt_mask.shape}')
 
-        torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
-        np.save(self.processed_dir / f'{self.split}/{stem}/mask.npy', gt_mask)
-
+        return spec_power_db, gt_mask
 
     def _get_gt_masks(self, shape, contours, interp='linear'):
         """"Get binary mask from each contour"""
@@ -206,7 +207,7 @@ class WhistleDataset(Dataset):
             # Quaility of annotation varies and some annotation are missing
             self.spect_lens.append(spect.shape[-1])
             if not self.spect_cfg.skeleton:
-                gt_mask = utils.dilate_mask(gt_mask)
+                gt_mask = utils.dilate_mask(gt_mask, kernel_size= self.spect_cfg.kernel_size)
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
 
@@ -346,29 +347,37 @@ class WhistlePatch(WhistleDataset):
         }
         return data
 
-def check_spect_dataset(cfg:SAMConfig):
+def check_spect_dataset(cfg:SAMConfig, output_dir='outputs/debug'):
     train_set = WhistleDataset(cfg, 'train', spect_nchan=1)
     test_set = WhistleDataset(cfg, 'test', spect_nchan=1)
     print(f'Train blocks: {len(train_set)}, Test blocks: {len(test_set)}')
     
     for stem in train_set.meta:
-        shutil.rmtree(f'outputs/debug/train/{stem}', ignore_errors=True)
+        save_dir=f'{output_dir}/train/{stem}'
+        if Path(save_dir).exists():
+            shutil.rmtree(save_dir, ignore_errors=True)
     for i, data in enumerate(tqdm(train_set, desc='check train set')):
-        spec, mask, info = data['img'], data['mask'], data['info']
+        spect, mask, info = data['img'], data['mask'], data['info']
+        print(i, spect.min(), spect.max())
+        # spect = utils.normalize_spect(spect, 'minmax')
         spec_id = info['spec_idx']
         stem = train_set.meta[spec_id]
-        save_dir=f'outputs/debug/train/{stem}'
-        utils.visualize_array(spec, cmap='bone', filename=f'train_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
+        save_dir=f'{output_dir}/train/{stem}'
+        utils.visualize_array(spect, cmap='bone', filename=f'train_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
         utils.visualize_array(mask, cmap='gray', filename=f'train_{spec_id}_{info["block_slice"].start}_2.mask', save_dir = save_dir)
 
     for stem in test_set.meta:
-        shutil.rmtree(f'outputs/debug/test/{stem}', ignore_errors=True)
+        save_dir=f'{output_dir}/test/{stem}'
+        if Path(save_dir).exists():
+            shutil.rmtree(save_dir, ignore_errors=True)
     for i, data in enumerate(tqdm(test_set, desc='check test set')):
-        spec, mask, info = data['img'], data['mask'], data['info']
+        spect, mask, info = data['img'], data['mask'], data['info']
+        print(i, spect.min(), spect.max())
+        # spect = utils.normalize_spect(spect, 'minmax')
         spec_id = info['spec_idx']
         stem = test_set.meta[spec_id]
-        save_dir=f'outputs/debug/test/{stem}'
-        utils.visualize_array(spec, cmap='bone',filename=f'test_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
+        save_dir=f'{output_dir}/test/{stem}'
+        utils.visualize_array(spect, cmap='bone',filename=f'test_{spec_id}_{info["block_slice"].start}_1.spec', save_dir = save_dir)
         utils.visualize_array(mask, cmap='gray',filename=f'test_{spec_id}_{info["block_slice"].start}_2.mask', save_dir = save_dir)
 
 def check_spect_block(cfg:SAMConfig, spec_idx=0, start=0, split = 'train', ):
@@ -376,6 +385,7 @@ def check_spect_block(cfg:SAMConfig, spec_idx=0, start=0, split = 'train', ):
     check_block = data_set.data[spec_idx]
     spect = check_block['img'][..., start:start+ cfg.spect_cfg.block_size]
     mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
+    spect = utils.normalize_spect(spect, 'minmax')
     utils.visualize_array(spect, cmap='bone')
     utils.visualize_array(mask, cmap='gray')
 
@@ -383,10 +393,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_type', type=str, default='spect')
+    parser.add_argument('--output_dir', type=str, default='outputs/debug')
     args, remaining = parser.parse_known_args()
     if args.data_type == 'spect':
         cfg = tyro.cli(SAMConfig, args=remaining)
-        check_spect_dataset(cfg)
+        check_spect_dataset(cfg, args.output_dir)
         check_spect_block(cfg, 0, 0, 'test')
     elif args.data_type == 'patch':
         cfg = tyro.cli(DWConfig, args=remaining)

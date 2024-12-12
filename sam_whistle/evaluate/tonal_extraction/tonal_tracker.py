@@ -56,10 +56,13 @@ class TonalTracker:
         self.freq_bin = self.spect_cfg.freq_bin
         # spectrogram and GT tonals
         self.audio_dir = Path(cfg.root_dir) / 'audio'
-        self.anno_dir = Path(cfg.root_dir) / 'annotation'
+        self.anno_dir = Path(cfg.root_dir) / 'anno'
         self.hop_s = self.spect_cfg.hop_ms / 1000
         self.block_size = self.cfg.spect_cfg.block_size
         self.spect_map, self.spect_snr = self._load_spectrogram(stem)  # [H, W]
+        # ############################
+        # self.spect_map, self.spect_snr = self.spect_map[:,:2*self.block_size], self.spect_snr[:, :2*self.block_size]
+        # ############################
         self.gt_tonals = self._load_gt_tonals(stem)
         # search parameters
         self.pre_peak_num = 0.25 * self.H
@@ -114,7 +117,7 @@ class TonalTracker:
         waveform = waveform[:, start_idx:end_idx]
         
         # to match the marie's implementation, set the center to False
-        spect_power_db= utils.wave_to_spect(waveform, sample_rate, center = True, **vars(self.cfg.spect_cfg))
+        spect_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.cfg.spect_cfg))
         spect_power_db = spect_power_db[0].numpy() # (freq, time)
         
         self.origin_shape = spect_power_db.shape
@@ -130,6 +133,11 @@ class TonalTracker:
         print(f'Loaded spectrogram from {stem}: {spect_power_db.shape}')
         
         self.start_cols = self._get_blocks()
+       
+        # ############################
+        # self.start_cols = self.start_cols[:2]
+        # self.W = self.start_cols[-1] + block_size
+        # ############################
 
         if self.cfg.use_conf:
             spect_power_db = np.flip(spect_power_db, axis=0)
@@ -298,7 +306,7 @@ class TonalTracker:
         pred_mask /= weights            
         self.spect_map = pred_mask
 
-    def _select_peaks(self, spectrum, method='simple', thre = 0.5):
+    def _select_peaks(self, spectrum, method='simple', thre = 0.5, order = 1):
         """Detect peaks based on SNR and other criteria, handling broadband signals separately.
         
         Args:
@@ -313,10 +321,11 @@ class TonalTracker:
         if method == 'simple':
             peaks, _ = utils.find_peaks_simple(spectrum)
         elif method == 'simpleN':
-            peaks, _ = utils.find_peaks_simpleN(spectrum)
+            peaks, _ = utils.find_peaks_simpleN(spectrum, order)
         peaks = [p for p in peaks if spectrum[p] >= thre]
         peaks = utils.consolidate_peaks(peaks, spectrum, min_gap=self.cfg.peak_dis)
         peak_num = len(peaks)
+        # print(self.current_win_idx, peaks)
         if peak_num > 0:
             increase = (peak_num - self.pre_peak_num) / self.H
             if increase > self.cfg.broadband:
@@ -347,7 +356,7 @@ class TonalTracker:
     def build_graph(self):
         assert self.thre > 1 if not self.cfg.use_conf else True, "Threshold must be greater than 1"
         while self.current_win_idx < self.W:
-            found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx], thre=self.thre)
+            found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx], thre=self.thre, order=self.cfg.order)
             if found_peaks:
                 self._prune_and_extend()
             self.current_win_idx += 1

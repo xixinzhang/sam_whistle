@@ -21,6 +21,8 @@ dependencies = [
     "tqdm>=4.67.0",
     "tyro>=0.9.2",
     "tensorboard>=2.18.0",
+    "prettytable",
+    "jpype",
 ]
 
 [tool.setuptools.packages.find]

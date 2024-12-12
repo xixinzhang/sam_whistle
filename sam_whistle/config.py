@@ -14,8 +14,9 @@ class SpectConfig:
     n_fft: Optional[int] = None
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
-    amin: float = 1e-20
-    normalize: str = 'minmax'
+    center: bool = True
+    amin: float = 1e-17
+    normalize: Literal['minmax', 'zscore'] = 'minmax'
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -30,7 +31,7 @@ class SpectConfig:
     skeleton: bool = False
     interp: Literal["linear", "polynomial", "spline"] = 'linear'
     origin_annos: bool = False
-    
+    kernel_size:int = 3
     balance_blocks: bool = False
 
 @dataclass
@@ -49,6 +50,7 @@ class SAMConfig:
     meta_file: str = 'meta.json'
     all_data: bool = False
     preprocess: bool = False
+    save_pre: bool = True
 
     debug: bool = False
     exp_name: Optional[str] = "sam"
@@ -65,7 +67,7 @@ class SAMConfig:
 
     num_workers: int = 8
     batch_size: int = 2
-    epochs: int = 50
+    epochs: int = 20
     encoder_lr: float = 5e-6
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5
@@ -164,6 +166,7 @@ class TonalConfig:
     thre_norm: float = 0.5
     thre: float = 9.8
     select_method:Literal["simple", "simpleN"] = 'simple'
+    order: int = 1
     minlen_ms: int = 150
     maxgap_ms: int = 50
     maxslope_Hz_per_ms: int = 1000

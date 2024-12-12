@@ -5,6 +5,8 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 import torch
+
+from sam_whistle import utils
 plt.switch_backend('agg')
 
 def show_spect(spect:np.array, fig, save:str = None):
@@ -76,7 +78,6 @@ def visualize(spect, masks,pred_mask, save_path=None, idx=None):
     # fig.savefig(f'{save_path}/spect_{idx}_prompt.png')
     # plt.close()
 
-import matplotlib.pyplot as plt
 
 def toggle_visual(image_sets):
     """
@@ -137,15 +138,13 @@ def toggle_visual(image_sets):
     plt.show()
 
 
-FLOAT_TYPE = [np.float32, np.float64]
-INT_TYPE = [np.uint8, np.uint16, np.int32, np.int64]
+FLOAT_TYPE = [np.float32, np.float64, torch.float32, torch.float64]
+INT_TYPE = [np.uint8, np.uint16, np.int32, np.int64, torch.int32, torch.int64]
 
 def visualize_array(
     array,
-    cmap="viridis",
-    axis_factor=0,
-    save_dir="outputs",
     filename=None,
+    save_dir="outputs",
     points=None,
     point_kwargs=[{
         "color": "green",
@@ -168,12 +167,21 @@ def visualize_array(
     mask_color = [255, 0, 102],
     random_colors=True,
     mask_alpha=0.6,
-
+    left_margin_px=0,
+    bottom_margin_px=0,
+    x_ticks_lables=None,
+    y_ticks_lables=None,
+    cmap="viridis",
 ):
     """Visualizes an array (PyTorch tensor, NumPy array) with optional overlays (points, lines, shapes).
 
     Args:
         array (torch.Tensor or np.ndarray): The image data as a NumPy array or a PyTorch tensor.
+        filename (str): The filename to save the visualization.
+        save_dir (str): The directory to save the visualization.
+        axis_padding (float): The padding around the image.
+        cmap (str): The colormap to use for grayscale images.
+        
         The value range should be [0, 1]. Can be mask, edge map, grayscale, or RGB image.
         points: (list of list of tuples): List of point sets to overlay on the image.
         boxes: (list of list of tuples): List of boxes to overlay on the image.
@@ -183,7 +191,7 @@ def visualize_array(
     array = array.squeeze()
     # Convert PyTorch tensor to NumPy array if necessary
     if isinstance(array, torch.Tensor):
-        array = array.cpu().numpy()
+        array = array.detach().cpu().numpy()
 
     if array.ndim == 3 and array.shape[0] <= 4:
         array = np.moveaxis(array, 0, -1)  # Convert CHW -> HWC
@@ -200,11 +208,13 @@ def visualize_array(
     height, width = array.shape[:2]
     fig, ax = plt.subplots(
         figsize=(
-            width / dpi * (1 + 2 * axis_factor),
-            height / dpi * (1 + 2 * axis_factor),
+            (width+ 2 * left_margin_px) / dpi ,
+            (height + 2 * bottom_margin_px) / dpi  ,
         ),
         dpi=dpi,
     )
+    left_margin_fraction = left_margin_px / (width + 2 * left_margin_px)
+    bottom_margin_fraction = bottom_margin_px / (height + 2 * bottom_margin_px)
     
     # Handle grayscale or mask visualization (HW)
     if array.ndim == 2:
@@ -230,11 +240,6 @@ def visualize_array(
         colored_mask = np.zeros((height, width, 4), dtype=np.float32)
         assert mask.dtype in INT_TYPE, "Mask must be an integer array"
         unique_classes = np.unique(mask)
-        if len(unique_classes) ==2:
-            color = np.random.rand(3,)  if random_colors else np.array(mask_color) / 255
-            color = np.concatenate([color, np.array([mask_alpha])], axis=0)
-            colored_mask = np.zeros((height, width, 4), dtype=np.float32)
-            colored_mask[mask == 1] = color.reshape(1, 1, 4)
         for cls in unique_classes:
             if cls == 0:
                 continue  # Skip zero values (background)
@@ -268,10 +273,26 @@ def visualize_array(
                 rect = Rectangle((x0, y0), w, h, **kwargs)
                 ax.add_patch(rect)
 
-    if not axis_factor:
+    if not left_margin_px and not bottom_margin_px:
         ax.axis("off")
+    else:
+        if x_ticks_lables is not None :
+            if isinstance(x_ticks_lables, list):
+                x_ticks, x_labels = x_ticks_lables
+                ax.set_xticks(x_ticks, x_labels)
+            elif isinstance(x_ticks_lables, int):
+                x_ticks = np.linspace(0, width, x_ticks_lables, endpoint=True, dtype=int)
+                ax.set_xticks(x_ticks)
+        if y_ticks_lables is not None:
+            if isinstance(y_ticks_lables, list):
+                y_ticks, y_labels = y_ticks_lables
+                ax.set_yticks(y_ticks, y_labels)
+            elif isinstance(y_ticks_lables, int):
+                y_ticks = np.linspace(0, height, y_ticks_lables, endpoint=True, dtype=int)
+                ax.set_yticks(y_ticks)
+
     plt.subplots_adjust(
-        left=axis_factor, right=1 - axis_factor, top=1 - axis_factor, bottom=axis_factor
+        left=left_margin_fraction, right=1 - left_margin_fraction, top=1 - bottom_margin_fraction, bottom=bottom_margin_fraction
     )
 
     if filename is not None and save_dir is not None:
@@ -282,6 +303,39 @@ def visualize_array(
         plt.close()
     else:
         plt.show()
+
+
+
+
+def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=False):
+    spect = utils.normalize_spect(spect, method='minmax')
+    if not pix_tick:
+        y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = np.linspace(5, 50, num=10, endpoint=True, dtype=int)[::-1]
+        x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = np.round(np.linspace(0, 3, num=20, endpoint=True), 2)
+    else:
+        y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = y_ticks[::-1]
+        x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = x_ticks
+    visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels])
+
+
+def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False):
+    spect = utils.normalize_spect(spect, method='minmax')
+    if not pix_tick:
+        y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = np.linspace(5, 50, num=10, endpoint=True, dtype=int)[::-1]
+        x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = np.round(np.linspace(0, 3, num=20, endpoint=True), 2)
+    else:
+        y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = y_ticks[::-1]
+        x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = x_ticks
+    visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels])
+
 
 
 if __name__ == '__main__':

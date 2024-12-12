@@ -15,13 +15,35 @@ def find_peaks_simpleN(signal, order = 1):
         signal: (H,) signal to analyze
         order: number of nearest neighbors to consider, default 1 followed Marie Roch
     """
-    peaks, valleys = [], []
-    for i in range(order, len(signal) - order):
-        if all(signal[i] > signal[i - order:i]) and all(signal[i] > signal[i + 1:i + order + 1]):
-            peaks.append(i)
-        if all(signal[i] < signal[i - order:i]) and all(signal[i] < signal[i + 1:i + order + 1]):
-            valleys.append(i)
-    return np.array(peaks), np.array(valleys)
+    # peaks, valleys = [], []
+    # for i in range(order, len(signal) - order):
+    #     if all(signal[i] > signal[i - order:i]) and all(signal[i] > signal[i + 1:i + order + 1]):
+    #         peaks.append(i)
+    #     if all(signal[i] < signal[i - order:i]) and all(signal[i] < signal[i + 1:i + order + 1]):
+    #         valleys.append(i)
+    # return np.array(peaks), np.array(valleys)
+
+    # Initialize masks for peaks and valleys
+    peaks_mask = np.ones(len(signal), dtype=bool)
+    valleys_mask = np.ones(len(signal), dtype=bool)
+
+    # Compare with rolled versions of the signal
+    for i in range(1, order + 1):
+        peaks_mask &= (signal > np.roll(signal, i)) & (signal > np.roll(signal, -i))
+        # valleys_mask &= (signal < np.roll(signal, i)) & (signal < np.roll(signal, -i))
+
+    # Remove edge effects
+    peaks_mask[:order] = False
+    peaks_mask[-order:] = False
+    # valleys_mask[:order] = False
+    # valleys_mask[-order:] = False
+
+    # Extract indices
+    peaks = np.where(peaks_mask)[0]
+    # valleys = np.where(valleys_mask)[0]
+
+    return peaks, []
+
 
 def consolidate_peaks(peaks, spectrum, min_gap = 2):
     """
