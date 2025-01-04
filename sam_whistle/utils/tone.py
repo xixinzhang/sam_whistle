@@ -48,8 +48,6 @@ def find_peaks_simpleN(signal, order = 1):
 def consolidate_peaks(peaks, spectrum, min_gap = 2):
     """
     Consolidates peaks that are closer than a specified minimum gap.
-
-
     """
     peaks = np.sort(peaks)
     peak_dist = np.diff(peaks)

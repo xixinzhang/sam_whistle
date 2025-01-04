@@ -54,9 +54,9 @@ def run_sam(cfg: SAMConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(cfg, 'train' )
+    trainset = WhistleDataset(cfg, 'train', transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
-    testset = WhistleDataset(cfg, 'test')
+    testset = WhistleDataset(cfg, 'test', transform=cfg.spect_cfg.transform)
     testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
 
@@ -126,9 +126,9 @@ def run_deep_whistle(cfg: DWConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistlePatch(cfg, 'train')
+    trainset = WhistlePatch(cfg, 'train', transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True)
-    testset = WhistlePatch(cfg, 'test')
+    testset = WhistlePatch(cfg, 'test', transform=cfg.spect_cfg.transform)
     testloader = DataLoader(testset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers,)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     
@@ -202,9 +202,9 @@ def run_fcn_spect(cfg: FCNSpectConfig):
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
     assert cfg.spect_cfg.block_multi == 1, "Should use block_multi=1"
-    trainset = WhistleDataset(cfg, 'train', spect_nchan=1)
+    trainset = WhistleDataset(cfg, 'train', spect_nchan=1, transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=cfg.num_workers, drop_last=False, collate_fn= custom_collate_fn)
-    testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+    testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
     testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     
@@ -284,9 +284,9 @@ def run_fcn_encoder(cfg: FCNEncoderConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    trainset = WhistleDataset(cfg, 'train', spect_nchan=1)
+    trainset = WhistleDataset(cfg, 'train', spect_nchan=1, transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=cfg.num_workers, drop_last=False, collate_fn= custom_collate_fn)
-    testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+    testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
     testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     

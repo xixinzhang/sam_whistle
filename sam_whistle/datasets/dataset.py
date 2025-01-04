@@ -12,11 +12,44 @@ import json
 from tqdm import tqdm
 import pickle
 import random
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-from segment_anything.utils.transforms import ResizeLongestSide
 from sam_whistle import utils, config
 from sam_whistle.config import DWConfig, SAMConfig
 
+
+def adjust_brightness_contrast(array, brightness_range=(-0.2, 0.2), contrast_range=(0.8, 1.2)):
+    brightness_offset = np.random.uniform(*brightness_range)
+    contrast_factor = np.random.uniform(*contrast_range)
+    augmented_array = array * contrast_factor + brightness_offset
+    augmented_array = np.clip(augmented_array, 0, 1)
+    return augmented_array
+
+
+def suppress_block_max(array, num_blocks=1, min_width=1, max_width=1500, min_suppression=0.75, max_suppression=1.1):
+    suppressed_array = array.clone()
+    height, width = suppressed_array.shape[-2:]
+    num_blocks = np.random.randint(0, num_blocks + 1)
+    factor = np.random.uniform(min_suppression, max_suppression)
+    # Calculate block min and max
+    block_min = array.min()
+    block_max = array.max()
+    new_max = block_max * factor
+
+    for _ in range(num_blocks):
+        block_width = np.random.randint(min_width, max_width + 1)
+        start_col = np.random.randint(0, width - block_width + 1)
+        block = array[..., start_col:start_col + block_width]
+        if block_max != block_min:  # Avoid division by zero
+            compressed_block = block_min + (block - block_min) * (new_max - block_min) / (block_max - block_min)
+        else:
+            compressed_block = block  # No change if all values are identical
+
+        # Update the array with the suppressed block
+        suppressed_array[..., start_col:start_col + block_width] = compressed_block
+
+    return suppressed_array
 
 def custom_collate_fn(batch):
     specs = [item['img'] for item in batch]
@@ -30,7 +63,7 @@ def custom_collate_fn(batch):
     }
             
 class WhistleDataset(Dataset):
-    def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3):
+    def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3, transform=False):
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.debug = cfg.debug
@@ -47,16 +80,25 @@ class WhistleDataset(Dataset):
         self.interp = self.spect_cfg.interp
         self.spect_nchan = spect_nchan
 
-        if self.cfg.preprocess:
-            self._preprocess(cfg.save_pre)
+        if transform:
+            if split == 'train':
+                self.transform = A.Compose([
+                    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+                    A.RandomGamma(gamma_limit=(80, 120), p=0.5),
+                    A.RandomToneCurve(scale=0.1, p=0.5),
+                    A.Normalize(mean= 0.5, std = 0.5, max_pixel_value=1.0),
+                    ToTensorV2()
+                ])
+            elif split == 'test':
+                self.transform = A.Compose([
+                    A.Normalize(mean= 0.5, std = 0.5, max_pixel_value=1.0),
+                    ToTensorV2()
+                ])
         else:
-            # check if all files are processed
-            for stem in self.meta:
-                if not (self.processed_dir / f'{split}/{stem}/spec.pt').exists():
-                    raise FileNotFoundError(f'{stem}.wav not found in split: {split}')
-                if not (self.processed_dir / f'{split}/{stem}/mask.npy').exists():
-                    raise FileNotFoundError(f'{stem}.bin not found in split: {split}')
-        
+            self.transform = None
+
+
+        self.raw_data = self._preprocess(cfg.save_pre)
         self.spect_lens = []
         self.data = self._get_data()
         self.spec_prob = [l/ sum(self.spect_lens) for l in self.spect_lens]
@@ -114,8 +156,14 @@ class WhistleDataset(Dataset):
         spect = self.data[spect_idx]['img'][..., block_slice]
         gt_mask = self.data[spect_idx]['mask'][..., block_slice]
 
-        if self.spect_nchan == 3:
-            spect = torch.cat([spect, spect, spect], axis=0) # [C, H, W]
+        spect = np.stack([spect] * self.spect_nchan, axis=-1) # [H, W, C]
+
+        if self.transform:
+            transformed  = self.transform(image = spect, mask = gt_mask)
+            spect, gt_mask= transformed['image'], transformed['mask']
+        else:
+            spect = spect.transpose(2, 0, 1)
+            
 
         data =  {
             "img": spect, 
@@ -137,18 +185,22 @@ class WhistleDataset(Dataset):
         return meta[self.split]
         
         
-    def _preprocess(self, save = True):
+    def _preprocess(self, save = False):
+        raw_data = {}
         for stem in self.meta:
             spec_power_db, gt_mask = self._wave_to_data(stem, save=save)
+            raw_data[stem] = {'img':spec_power_db, 'mask':gt_mask}
+        return raw_data
 
-    def _wave_to_data(self, stem,save=True):
+
+    def _wave_to_data(self, stem, save=False):
         """process one audio file to spectrogram images and get annotations"""
         # spcet
         audio_file = self.audio_dir / f'{stem}.wav'
         bin_file = self.anno_dir/ f'{stem}.bin'
-        waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
-        spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg)) # [C, F, T]
-        spec_power_db = torch.flip(spec_power_db, [-2])
+        waveform, sample_rate = utils.load_wave_file(audio_file, type='numpy') # [C, L] Channel first
+        spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg)) # [F, T]
+        spec_power_db = np.flip(spec_power_db, [-2])
 
         # annotations
         shape = spec_power_db.shape[-2:]
@@ -172,7 +224,7 @@ class WhistleDataset(Dataset):
             if path.exists():
                 shutil.rmtree(path)
             path.mkdir(parents=True, exist_ok=True)
-            torch.save(spec_power_db, self.processed_dir / f'{self.split}/{stem}/spec.pt')
+            np.save(self.processed_dir / f'{self.split}/{stem}/spec.npy', spec_power_db)
             np.save(self.processed_dir / f'{self.split}/{stem}/mask.npy', gt_mask)
 
         print(f'Loaded spectrogram from {stem}.wav, shape: {spec_power_db.shape}, min: {spec_power_db.min():.2f}, max: {spec_power_db.max():2f}')
@@ -200,8 +252,8 @@ class WhistleDataset(Dataset):
         """
         data = {}
         for i, stem in enumerate(self.meta):
-            spect = torch.load(self.processed_dir / f'{self.split}/{stem}/spec.pt', weights_only=False)
-            gt_mask = np.load(self.processed_dir / f'{self.split}/{stem}/mask.npy')
+            spect = self.raw_data[stem]['img']
+            gt_mask = self.raw_data[stem]['mask']
             assert gt_mask.ndim == 2, 'mask should be 2D as input to cv2.dilate'
             # Get gt mask from annotation
             # Quaility of annotation varies and some annotation are missing
@@ -211,12 +263,12 @@ class WhistleDataset(Dataset):
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
 
-            spect = utils.normalize_spect(spect, self.spect_cfg.normalize)
+            spect = utils.normalize_spect(spect, self.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max, mean=self.cfg.spect_cfg.mean, std=self.cfg.spect_cfg.std)
             if self.spect_cfg.crop:
-                spect = spect[:, -self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
-                gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1]
+                spect = spect[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
+                gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
                 
-            data[i] = {'img':spect, 'mask':gt_mask[None]}
+            data[i] = {'img':spect, 'mask':gt_mask}
         return data
             
 
@@ -253,8 +305,8 @@ class WhistleDataset(Dataset):
 
 
 class WhistlePatch(WhistleDataset):
-    def __init__(self, cfg: DWConfig, split='train', spect_nchan=1):
-        super().__init__(cfg, split, spect_nchan=spect_nchan)
+    def __init__(self, cfg: DWConfig, split='train', spect_nchan=1, transform=False):
+        super().__init__(cfg, split, spect_nchan=spect_nchan, transform=transform)
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.patch_size = self.spect_cfg.patch_size
@@ -317,7 +369,7 @@ class WhistlePatch(WhistleDataset):
 
         print(f'Positive patches: {len(self.pos_patches)}, Negative patches: {len(self.neg_patches)}')
         
-        if self.split == 'train' and  self.spect_cfg.balance_patches:
+        if self.spect_cfg.balance_patches:
             balanced_size = min(len(self.pos_patches), len(self.neg_patches))
             if balanced_size <= len(self.neg_patches):
                 self.patch_data = self.pos_patches + random.sample(self.neg_patches, balanced_size)
@@ -340,6 +392,12 @@ class WhistlePatch(WhistleDataset):
         patch_mask = self.data[spec_idx]['mask'][..., i:i+self.patch_size, j:j+self.patch_size]
         label = patch_meta['label']
 
+        patch = np.stack([patch] * self.spect_nchan, axis=-1) # [H, W, C]
+
+        if self.transform:
+            transformed  = self.transform(image = patch, mask = patch_mask)
+            patch, patch_mask= transformed['image'], transformed['mask']
+
         data = {
             'img': patch,
             'mask': patch_mask,
@@ -348,8 +406,8 @@ class WhistlePatch(WhistleDataset):
         return data
 
 def check_spect_dataset(cfg:SAMConfig, output_dir='outputs/debug'):
-    train_set = WhistleDataset(cfg, 'train', spect_nchan=1)
-    test_set = WhistleDataset(cfg, 'test', spect_nchan=1)
+    train_set = WhistleDataset(cfg, 'train', spect_nchan=1, transform=True)
+    test_set = WhistleDataset(cfg, 'test', spect_nchan=1, transform=True)
     print(f'Train blocks: {len(train_set)}, Test blocks: {len(test_set)}')
     
     for stem in train_set.meta:
@@ -360,6 +418,8 @@ def check_spect_dataset(cfg:SAMConfig, output_dir='outputs/debug'):
         spect, mask, info = data['img'], data['mask'], data['info']
         print(i, spect.min(), spect.max())
         # spect = utils.normalize_spect(spect, 'minmax')
+        spect = np.clip(spect * 0.5 + 0.5, 0, 1)
+
         spec_id = info['spec_idx']
         stem = train_set.meta[spec_id]
         save_dir=f'{output_dir}/train/{stem}'
@@ -374,6 +434,8 @@ def check_spect_dataset(cfg:SAMConfig, output_dir='outputs/debug'):
         spect, mask, info = data['img'], data['mask'], data['info']
         print(i, spect.min(), spect.max())
         # spect = utils.normalize_spect(spect, 'minmax')
+        spect = np.clip(spect * 0.5 + 0.5, 0, 1)
+
         spec_id = info['spec_idx']
         stem = test_set.meta[spec_id]
         save_dir=f'{output_dir}/test/{stem}'
@@ -385,7 +447,9 @@ def check_spect_block(cfg:SAMConfig, spec_idx=0, start=0, split = 'train', ):
     check_block = data_set.data[spec_idx]
     spect = check_block['img'][..., start:start+ cfg.spect_cfg.block_size]
     mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
-    spect = utils.normalize_spect(spect, 'minmax')
+    # spect = utils.normalize_spect(spect, 'minmax')
+    # spect = np.clip(spect * 0.5 + 0.5, 0, 1)
+
     utils.visualize_array(spect, cmap='bone')
     utils.visualize_array(mask, cmap='gray')
 

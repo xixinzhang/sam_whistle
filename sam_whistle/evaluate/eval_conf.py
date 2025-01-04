@@ -36,7 +36,7 @@ def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = Non
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test')
+        testset = WhistleDataset(cfg, 'test', transform=True)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
 
         if cfg.loss_fn == "mse":
@@ -90,7 +90,7 @@ def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = Non
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistlePatch(cfg, 'test',)
+        testset = WhistlePatch(cfg, 'test', transform=True)
         testloader = DataLoader(testset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
         loss_fn  = Charbonnier_loss()
     else:
@@ -132,7 +132,7 @@ def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Sp
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=True)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
 
         model.init_patch_ls(testset[0]['img'].shape[-2:])
@@ -178,7 +178,7 @@ def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FC
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test',spect_nchan=1)
+        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=True)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
         print(f"Test set size: {len(testset)}")
         model.init_patch_ls()

@@ -8,6 +8,8 @@ import torch
 import os
 from tqdm import tqdm
 from dataclasses import dataclass, field
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 from sam_whistle.evaluate.tonal_extraction import tfTreeSet, ActiveSet
 from sam_whistle.model import *
@@ -60,9 +62,6 @@ class TonalTracker:
         self.hop_s = self.spect_cfg.hop_ms / 1000
         self.block_size = self.cfg.spect_cfg.block_size
         self.spect_map, self.spect_snr = self._load_spectrogram(stem)  # [H, W]
-        # ############################
-        # self.spect_map, self.spect_snr = self.spect_map[:,:2*self.block_size], self.spect_snr[:, :2*self.block_size]
-        # ############################
         self.gt_tonals = self._load_gt_tonals(stem)
         # search parameters
         self.pre_peak_num = 0.25 * self.H
@@ -107,24 +106,23 @@ class TonalTracker:
     def _load_spectrogram(self, stem: str):
         """Load original spectrogram from wave file, used for graph search baseline with"""
         audio_file = self.audio_dir / f'{stem}.wav'
-        waveform, sample_rate = utils.load_wave_file(audio_file) # [C, L] Channel first
+        waveform, sample_rate = utils.load_wave_file(audio_file) # [L] 
         wave_len_s = waveform.shape[-1] / sample_rate
 
         start_s = max(0, self.cfg.start_s)
         end_s = min(self.cfg.end_s, wave_len_s)
         start_idx = int(start_s * sample_rate)
         end_idx = int(end_s * sample_rate)
-        waveform = waveform[:, start_idx:end_idx]
+        waveform = waveform[..., start_idx:end_idx]
         
         # to match the marie's implementation, set the center to False
-        spect_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.cfg.spect_cfg))
-        spect_power_db = spect_power_db[0].numpy() # (freq, time)
+        spect_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.cfg.spect_cfg))# (freq, time)
         
         self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
             spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
         
-        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize ), axis=0)
+        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
         self.H, self.W = spect_power_db.shape[-2:]
         spect_snr = np.zeros_like(spect_power_db)
         block_size = self.block_size
@@ -134,14 +132,9 @@ class TonalTracker:
         
         self.start_cols = self._get_blocks()
        
-        # ############################
-        # self.start_cols = self.start_cols[:2]
-        # self.W = self.start_cols[-1] + block_size
-        # ############################
-
         if self.cfg.use_conf:
             spect_power_db = np.flip(spect_power_db, axis=0)
-            spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize)
+            spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize,  min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max)
             return spect_power_db, spect_snr
         else:
             return spect_snr, spect_snr
@@ -183,11 +176,16 @@ class TonalTracker:
         block_size = cfg.spect_cfg.block_size
         start_cols = self.start_cols
 
+        transform = A.Compose([
+            A.Normalize(mean=cfg.mean, std=cfg.std),
+            ToTensorV2()
+        ])
+
         for start in start_cols:
             end = start + block_size
-            block = spect_map[:, start:end]
-            block = torch.tensor(block).unsqueeze(0).to(cfg.device)
-            block = torch.cat([block, block, block], axis=0).unsqueeze(0)
+            block = spect_map[..., start:end]
+            block = transform(image=block)['image']
+            block = torch.cat([block, block, block], axis=0).to(cfg.device)
             pred = model(block).cpu().numpy().squeeze()
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
@@ -323,7 +321,7 @@ class TonalTracker:
         elif method == 'simpleN':
             peaks, _ = utils.find_peaks_simpleN(spectrum, order)
         peaks = [p for p in peaks if spectrum[p] >= thre]
-        peaks = utils.consolidate_peaks(peaks, spectrum, min_gap=self.cfg.peak_dis)
+        peaks = utils.consolidate_peaks(peaks, spectrum, min_gap=self.cfg.peak_dis_thr)
         peak_num = len(peaks)
         # print(self.current_win_idx, peaks)
         if peak_num > 0:
@@ -334,9 +332,7 @@ class TonalTracker:
                 self.current_peaks = peaks
                 self.current_peaks_freq = peaks * self.freq_bin + self.offset_Hz
                 self.pre_peak_num = peak_num
-                return True
-        
-        return False            
+        return peaks.tolist()
 
 
     def _prune_and_extend(self):
@@ -354,15 +350,18 @@ class TonalTracker:
     
 
     def build_graph(self):
+        all_peaks = []
         assert self.thre > 1 if not self.cfg.use_conf else True, "Threshold must be greater than 1"
         while self.current_win_idx < self.W:
             found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx], thre=self.thre, order=self.cfg.order)
             if found_peaks:
                 self._prune_and_extend()
+                all_peaks.extend([(self.H - p, self.current_win_idx, ) for p in found_peaks])
             self.current_win_idx += 1
             self.current_s += self.hop_s
         # final prune
         self.active_set.prune(self.current_s + 2*self.maxgap_s,self.minlen_s, self.maxgap_s)
+        return all_peaks
 
 
     def get_tonals(self):
@@ -526,6 +525,8 @@ class TonalTracker:
                 all_dura.append(gt_dura)
                 all_excess_s.append(excess_s)
                 # print(f'gt_idx: {gt_idx}, covered_s: {covered_s}, excess_s: {excess_s}, deviations: {gt_deviation}')
+        self.gt_tonals_valid = [gt_tonals[i] for i in gt_matched_valid+gt_missed_valid]
+        self.gt_tonals_missed_valid = [gt_tonals[i] for i in gt_missed_valid]
 
         tonal_stats = TonalResults(
             dt_false_pos_all = len(dt_false_pos_all),

@@ -2,14 +2,13 @@ import torchaudio
 import librosa
 import numpy as np
 import torchaudio.functional as F
-import torch
 import tyro
 from scipy.signal import medfilt2d
 
 from sam_whistle.config import SpectConfig
 from sam_whistle import utils
 
-def load_wave_file(file_path, type='tensor'):
+def load_wave_file(file_path, type='numpy'):
     """Load one wave file."""
     if type == 'numpy':
         waveform, sample_rate = librosa.load(file_path, sr=None)
@@ -31,29 +30,33 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
         else:
             raise ValueError("hop_length or hop_ms must be provided.")
 
-    # power scale spectrogram
-    spec = F.spectrogram(
+    # spectrogram magnitude
+    spect = librosa.stft(
         waveform,
-        pad=pad,
-        window=torch.hamming_window(n_fft),
-        n_fft=n_fft, 
+        n_fft=n_fft,
         hop_length=hop_length,
         win_length=n_fft,
-        power=2.0,
-        normalized=False,
+        window='hamming',
         center=center,
         pad_mode='reflect',
-        onesided=True,
+
     )
     # decibel scale spectrogram with cutoff specified by top_db
-    spect_power_db = F.amplitude_to_DB(spec, multiplier=10.0, amin=amin, db_multiplier=0.0, top_db=top_db)
-    return spect_power_db # (C, freq, time)
+    spect_power_db = librosa.amplitude_to_db(
+        np.abs(spect),
+        ref=1.0,
+        amin=amin,
+        top_db=top_db,
+    )
+    return spect_power_db # (freq, time)
 
-def normalize_spect(spect, method='minmax'):
+def normalize_spect(spect, method='minmax', min=None, max=None, mean =None, std = None, **kwargs):
     if method == 'minmax':
         spect = (spect - spect.min()) / (spect.max() - spect.min())  # normalize to [0, 1]
     elif method == 'zscore':
         spect = (spect - spect.mean()) / spect.std()  # normalize to zscore
+    elif method == 'fixed_minmax':
+        spect = (spect - min) / (max - min)
     else:
         raise ValueError("Invalid normalization method")
     return spect

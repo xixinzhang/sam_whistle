@@ -59,13 +59,13 @@ def res_to_metric(res: TonalResults):
 def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None, stem=None):
     tracker.reset()
     tracker.thre = thre
-    tracker.build_graph()
+    peaks = tracker.build_graph()
     tonals = tracker.get_tonals()
     res = tracker.compare_tonals()
 
     if visualize:
         gt_tonals =[]
-        for anno in tracker.gt_tonals:
+        for anno in tracker.gt_tonals_missed_valid:
             gt = utils.anno_to_spect_point(anno)
             gt_tonals.append(gt)
         gt_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, gt_tonals)
@@ -86,11 +86,16 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             pred_mask = (pred_block > tracker.thre).astype(int)
             gt_tonal_block = gt_tonal_mask[:, col: col + tracker.block_size]
             pred_tonal_block = pred_tonal_mask[:, col: col + tracker.block_size]
+            block_peaks = [(peak[0], peak[1]- col) for peak in peaks  if peak[1] >= col and peak[1] < col + tracker.block_size]
             
             utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}')
             utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}')
             utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
             utils.plot_mask_over_spect(raw_block, pred_tonal_block, filename=f'{col}_2.pred_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
+            if len(block_peaks) > 0:
+                utils.plot_points_over_spect(raw_block, [block_peaks], filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
+            else:
+                utils.plot_spect(raw_block, filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
         
     return res
 
@@ -104,7 +109,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
 
 
     threshold_list = np.linspace(min_thre, max_thre, thre_num, endpoint=True)
-    threshold_list = [0.26]
+    threshold_list = [0.01, 0.47, 0.99]
     prs = defaultdict(list)
     # all_tonal_stats = defaultdict(dict[str, TonalStats])
     # all_tonal_res = defaultdict(dict)
@@ -139,12 +144,12 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             precision = metrics.precision_valid
             recall = metrics.recall_valid
             prs[stem].append((precision, recall, thre))
-            print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}')
-            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std}' ,f'{metrics.frag:.2f}'])
+            print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
+            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
 
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
-        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std}',f'{metrics_all.frag:.2f}'])
+        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
 
@@ -170,7 +175,7 @@ if __name__ == "__main__":
     if not args.eval_multiple:
         stem = None
         # stem = ["Qx-Dc-CC0411-TAT11-CH2-041114-154040-s", "palmyra092007FS192-070924-205305"]
-        stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
+        # stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
         eval_graph_search(cfg, model_name = args.model, stems=stem, min_thre=args.min_thre, max_thre=args.max_thre, thre_num=args.thre_num, output_dir=args.output_dir)
     else:
         eval_results = [

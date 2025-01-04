@@ -14,16 +14,16 @@ pip install -e ./segment-anything/
 ## Data processing
 no skeleton, no crop
 ```shell
-python sam_whistle/datasets/dataset.py --preprocess --all_data --spect_cfg.block_multi 1 --debug --spect_cfg.interp linear --spect_cfg.normalize zscore --spect_cfg.no_center
+python sam_whistle/datasets/dataset.py --preprocess --all_data --spect_cfg.block_multi 1 --debug --spect_cfg.interp linear --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.kernel_size 2
 ```
 
 ## Training & Inference
 training
 ```shell
- python sam_whistle/main.py --model sam --exp_name zscore_spline --batch_size 2 --device cuda:0 --spect_cfg.block_multi 3 --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --preprocess
-python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:0
-python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0
-python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0
+python sam_whistle/main.py --model sam --batch_size 2 --device cuda:0 --spect_cfg.block_multi 3 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
+python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
+python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
+python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
 ```
 inference
 ```shell

@@ -15,8 +15,13 @@ class SpectConfig:
     hop_length: Optional[int] = None
     top_db: Optional[None] = None
     center: bool = True
-    amin: float = 1e-17
-    normalize: Literal['minmax', 'zscore'] = 'minmax'
+    amin: float = 1e-20
+    normalize: Literal['minmax', 'zscore', 'fixed_minmax'] = 'fixed_minmax'
+    mean: Optional[float] = 0.5
+    std: Optional[float] = 0.5
+    fix_min: float = -200
+    fix_max: float = 100
+    transform: bool = True
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
@@ -31,7 +36,7 @@ class SpectConfig:
     skeleton: bool = False
     interp: Literal["linear", "polynomial", "spline"] = 'linear'
     origin_annos: bool = False
-    kernel_size:int = 3
+    kernel_size:int = 2
     balance_blocks: bool = False
 
 @dataclass
@@ -49,8 +54,7 @@ class SAMConfig:
     root_dir: str = 'data/dclde'
     meta_file: str = 'meta.json'
     all_data: bool = False
-    preprocess: bool = False
-    save_pre: bool = True
+    save_pre: bool = False
 
     debug: bool = False
     exp_name: Optional[str] = "sam"
@@ -81,7 +85,7 @@ class DWConfig:
     root_dir: str = 'data/dclde'
     meta_file: str = 'meta.json'
     all_data: bool = False
-    preprocess: bool = False
+    save_pre: bool = False
 
     debug: bool = False
     exp_name: Optional[str] = "deep_whistle"
@@ -105,7 +109,7 @@ class FCNSpectConfig:
     root_dir: str = 'data/dclde'
     meta_file: str = 'meta.json'
     all_data: bool = False
-    preprocess: bool = False
+    save_pre: bool = False
 
     debug: bool = False
     exp_name: Optional[str] = "fcn_spect"
@@ -131,7 +135,7 @@ class FCNEncoderConfig:
     root_dir: str = 'data/dclde'
     meta_file: str = 'meta.json'
     all_data: bool = False
-    preprocess: bool = False
+    save_pre: bool = False
 
     debug: bool = False
     exp_name: Optional[str] = "fcn_encoder"
@@ -167,11 +171,11 @@ class TonalConfig:
     thre: float = 9.8
     select_method:Literal["simple", "simpleN"] = 'simple'
     order: int = 1
-    minlen_ms: int = 150
-    maxgap_ms: int = 50
-    maxslope_Hz_per_ms: int = 1000
-    activeset_s: float = 0.05
-    peak_dis: int = 2
+    minlen_ms: int = 150 # Whistles whose duration is shorter than threshold will be discarded.
+    maxgap_ms: int = 50 # Maximum gap in energy to bridge when looking for a tonal
+    maxslope_Hz_per_ms: int = 1000 # Maximum difference in frequency to bridge when looking for a tonal
+    activeset_s: float = 0.05 # peaks with earliest time > activeset_s will be part of active_set otherwise part of orphan set
+    peak_dis_thr: int = 2
     disambiguate_s: float = 0.3
     broadband:float = 0.01
 
