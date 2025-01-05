@@ -146,7 +146,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             prs[stem].append((precision, recall, thre))
             print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
             table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
-
+        
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
         table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])

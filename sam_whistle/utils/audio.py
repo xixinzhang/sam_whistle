@@ -39,7 +39,6 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
         window='hamming',
         center=center,
         pad_mode='reflect',
-
     )
     # decibel scale spectrogram with cutoff specified by top_db
     spect_power_db = librosa.amplitude_to_db(

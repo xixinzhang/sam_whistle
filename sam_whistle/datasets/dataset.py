@@ -19,38 +19,6 @@ from sam_whistle import utils, config
 from sam_whistle.config import DWConfig, SAMConfig
 
 
-def adjust_brightness_contrast(array, brightness_range=(-0.2, 0.2), contrast_range=(0.8, 1.2)):
-    brightness_offset = np.random.uniform(*brightness_range)
-    contrast_factor = np.random.uniform(*contrast_range)
-    augmented_array = array * contrast_factor + brightness_offset
-    augmented_array = np.clip(augmented_array, 0, 1)
-    return augmented_array
-
-
-def suppress_block_max(array, num_blocks=1, min_width=1, max_width=1500, min_suppression=0.75, max_suppression=1.1):
-    suppressed_array = array.clone()
-    height, width = suppressed_array.shape[-2:]
-    num_blocks = np.random.randint(0, num_blocks + 1)
-    factor = np.random.uniform(min_suppression, max_suppression)
-    # Calculate block min and max
-    block_min = array.min()
-    block_max = array.max()
-    new_max = block_max * factor
-
-    for _ in range(num_blocks):
-        block_width = np.random.randint(min_width, max_width + 1)
-        start_col = np.random.randint(0, width - block_width + 1)
-        block = array[..., start_col:start_col + block_width]
-        if block_max != block_min:  # Avoid division by zero
-            compressed_block = block_min + (block - block_min) * (new_max - block_min) / (block_max - block_min)
-        else:
-            compressed_block = block  # No change if all values are identical
-
-        # Update the array with the suppressed block
-        suppressed_array[..., start_col:start_col + block_width] = compressed_block
-
-    return suppressed_array
-
 def custom_collate_fn(batch):
     specs = [item['img'] for item in batch]
     masks = [item['mask'] for item in batch]
@@ -80,22 +48,19 @@ class WhistleDataset(Dataset):
         self.interp = self.spect_cfg.interp
         self.spect_nchan = spect_nchan
 
+        trans = []
         if transform:
             if split == 'train':
-                self.transform = A.Compose([
+                trans.extend([
                     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
                     A.RandomGamma(gamma_limit=(80, 120), p=0.5),
                     A.RandomToneCurve(scale=0.1, p=0.5),
-                    A.Normalize(mean= 0.5, std = 0.5, max_pixel_value=1.0),
-                    ToTensorV2()
                 ])
-            elif split == 'test':
-                self.transform = A.Compose([
+            trans.append(
                     A.Normalize(mean= 0.5, std = 0.5, max_pixel_value=1.0),
-                    ToTensorV2()
-                ])
-        else:
-            self.transform = None
+            )
+        trans.append(ToTensorV2(transpose_mask = True))
+        self.transform = A.Compose(trans)
 
 
         self.raw_data = self._preprocess(cfg.save_pre)
@@ -156,14 +121,14 @@ class WhistleDataset(Dataset):
         spect = self.data[spect_idx]['img'][..., block_slice]
         gt_mask = self.data[spect_idx]['mask'][..., block_slice]
 
-        spect = np.stack([spect] * self.spect_nchan, axis=-1) # [H, W, C]
+        if spect.ndim == 2:
+            spect = np.stack([spect] * self.spect_nchan, axis=-1) # [H, W, C]
+        if gt_mask.ndim == 2:
+            gt_mask = np.expand_dims(gt_mask, 2)
 
-        if self.transform:
-            transformed  = self.transform(image = spect, mask = gt_mask)
-            spect, gt_mask= transformed['image'], transformed['mask']
-        else:
-            spect = spect.transpose(2, 0, 1)
-            
+        transformed  = self.transform(image = spect, mask = gt_mask)
+        spect, gt_mask= transformed['image'], transformed['mask']
+        
 
         data =  {
             "img": spect, 
@@ -192,13 +157,12 @@ class WhistleDataset(Dataset):
             raw_data[stem] = {'img':spec_power_db, 'mask':gt_mask}
         return raw_data
 
-
     def _wave_to_data(self, stem, save=False):
         """process one audio file to spectrogram images and get annotations"""
         # spcet
         audio_file = self.audio_dir / f'{stem}.wav'
         bin_file = self.anno_dir/ f'{stem}.bin'
-        waveform, sample_rate = utils.load_wave_file(audio_file, type='numpy') # [C, L] Channel first
+        waveform, sample_rate = utils.load_wave_file(audio_file) # [L]
         spec_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.spect_cfg)) # [F, T]
         spec_power_db = np.flip(spec_power_db, [-2])
 
@@ -247,8 +211,8 @@ class WhistleDataset(Dataset):
         """Load all spectrogram and gt mask, normalize and crop
         
         Returns:
-            spect: C, H, W
-            gt_mask: H, W
+            spect: H, W, C
+            gt_mask: H, W, 1
         """
         data = {}
         for i, stem in enumerate(self.meta):
@@ -267,7 +231,6 @@ class WhistleDataset(Dataset):
             if self.spect_cfg.crop:
                 spect = spect[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
                 gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
-                
             data[i] = {'img':spect, 'mask':gt_mask}
         return data
             
@@ -369,7 +332,7 @@ class WhistlePatch(WhistleDataset):
 
         print(f'Positive patches: {len(self.pos_patches)}, Negative patches: {len(self.neg_patches)}')
         
-        if self.spect_cfg.balance_patches:
+        if self.split == 'train' and  self.spect_cfg.balance_patches:
             balanced_size = min(len(self.pos_patches), len(self.neg_patches))
             if balanced_size <= len(self.neg_patches):
                 self.patch_data = self.pos_patches + random.sample(self.neg_patches, balanced_size)
@@ -392,11 +355,13 @@ class WhistlePatch(WhistleDataset):
         patch_mask = self.data[spec_idx]['mask'][..., i:i+self.patch_size, j:j+self.patch_size]
         label = patch_meta['label']
 
-        patch = np.stack([patch] * self.spect_nchan, axis=-1) # [H, W, C]
+        if patch.ndim == 2:
+            patch = np.stack([patch] * self.spect_nchan, axis=-1) # [H, W, C]
+        if patch_mask.ndim == 2:
+            patch_mask = np.expand_dims(patch_mask, 2)
 
-        if self.transform:
-            transformed  = self.transform(image = patch, mask = patch_mask)
-            patch, patch_mask= transformed['image'], transformed['mask']
+        transformed  = self.transform(image = patch, mask = patch_mask)
+        patch, patch_mask= transformed['image'], transformed['mask']
 
         data = {
             'img': patch,
@@ -449,7 +414,6 @@ def check_spect_block(cfg:SAMConfig, spec_idx=0, start=0, split = 'train', ):
     mask = check_block['mask'][..., start:start+ cfg.spect_cfg.block_size]
     # spect = utils.normalize_spect(spect, 'minmax')
     # spect = np.clip(spect * 0.5 + 0.5, 0, 1)
-
     utils.visualize_array(spect, cmap='bone')
     utils.visualize_array(mask, cmap='gray')
 
