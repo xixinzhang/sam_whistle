@@ -13,7 +13,6 @@ from sam_whistle.config import TonalConfig
 from sam_whistle.evaluate.tonal_extraction.tonal_tracker import TonalTracker, TonalResults
 from sam_whistle.utils import utils
 
-
 @dataclass
 class TonalStats:
     precision_valid: float
@@ -29,7 +28,7 @@ class TonalStats:
 
 
 def res_to_metric(res: TonalResults):
-    precision_valid = res.dt_true_pos_valid / (res.dt_true_pos_valid + res.dt_false_pos_all)
+    precision_valid = res.dt_true_pos_valid / (res.dt_true_pos_valid + res.dt_false_pos_all + 1e-8)
     gt_num = res.gt_matched_valid + res.gt_missed_valid
     recall_valid = res.gt_matched_valid / gt_num
     dev_mean = np.mean(res.all_deviation)
@@ -106,13 +105,14 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
     elif isinstance(stems, str):
         stems = [stems]
+    else:
+        raise ValueError("Invalid stems")
 
-
-    threshold_list = np.linspace(min_thre, max_thre, thre_num, endpoint=True)
-    threshold_list = [0.01, 0.47, 0.99]
+    if not cfg.debug:
+        threshold_list = np.linspace(min_thre, max_thre, thre_num, endpoint=True)
+    else:
+        threshold_list = [0.3, 0.47, 0.9]
     prs = defaultdict(list)
-    # all_tonal_stats = defaultdict(dict[str, TonalStats])
-    # all_tonal_res = defaultdict(dict)
 
     trackers = {}
     for stem in stems:
@@ -135,7 +135,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
     for thre in threshold_list:
         print(f"{'#'*30} Threshold: {thre} {'#'*30}")
         table = PrettyTable()
-        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "Deviation", "Coverage", "Excess", "Frag"]
+        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag"]
         res_all = TonalResults()
         for stem, tracker in trackers.items():
             res = extract_tonals(tracker, thre, visualize=cfg.visualize, output_dir=output_dir+f'/{thre}', stem=stem)
@@ -145,11 +145,11 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             recall = metrics.recall_valid
             prs[stem].append((precision, recall, thre))
             print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
-            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
+            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
         
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
-        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
+        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
 
@@ -173,9 +173,10 @@ if __name__ == "__main__":
     cfg = tyro.cli(TonalConfig, args=remainings)
     
     if not args.eval_multiple:
-        stem = None
-        # stem = ["Qx-Dc-CC0411-TAT11-CH2-041114-154040-s", "palmyra092007FS192-070924-205305"]
-        # stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
+        if not cfg.debug:
+            stem = None
+        else:
+            stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
         eval_graph_search(cfg, model_name = args.model, stems=stem, min_thre=args.min_thre, max_thre=args.max_thre, thre_num=args.thre_num, output_dir=args.output_dir)
     else:
         eval_results = [

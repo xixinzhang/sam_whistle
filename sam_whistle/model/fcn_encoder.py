@@ -72,11 +72,10 @@ class FCN_encoder(nn.Module):
         patch_count = torch.zeros_like(input_spect)
         image_encoding = torch.zeros_like(input_spect)
 
-        for p in self.patch_starts:
-            i, j = p
-            patch = input_spect[..., i:i+patch_size, j:j+patch_size]
-            patch_pred = self.img_encoder(patch)
-            image_encoding[..., i:i+patch_size, j:j+patch_size] += patch_pred
+        patches = torch.cat([input_spect[..., i:i+patch_size, j:j+patch_size] for i, j in self.patch_starts], dim=0)
+        patches_feat = self.img_encoder(patches)
+        for idx, (i, j) in enumerate(self.patch_starts):
+            image_encoding[..., i:i+patch_size, j:j+patch_size] += patches_feat[idx]
             patch_count[..., i:i+patch_size, j:j+patch_size] += 1
         
         spect_feat = image_encoding / patch_count # (B, 1, 1024, 1024)

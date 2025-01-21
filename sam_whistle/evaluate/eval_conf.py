@@ -26,11 +26,11 @@ def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = Non
         model.to(cfg.device)
         # Load model weights
         if not cfg.freeze_img_encoder:
-            model.img_encoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'img_encoder.pth')))
+            model.img_encoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'img_encoder.pth'), weights_only = True))
         if not cfg.freeze_mask_decoder:
-            model.decoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'decoder.pth')))
+            model.decoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'decoder.pth'),  weights_only = True))
         if not cfg.freeze_prompt_encoder:
-            model.sam_model.prompt_encoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'prompt_encoder.pth')))
+            model.sam_model.prompt_encoder.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'prompt_encoder.pth'), weights_only = True))
         
         output_path = os.path.join(cfg.log_dir, 'predictions')
         if not os.path.exists(output_path) and visualize_eval:
@@ -84,7 +84,7 @@ def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = Non
     if load:
         model = Detection_ResNet_BN2(cfg.width)
         model.to(cfg.device)
-        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device))
+        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
         
         output_path = os.path.join(cfg.log_dir, 'predictions')
         if not os.path.exists(output_path) and visualize_eval:
@@ -125,7 +125,7 @@ def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Sp
     if load:
         model = FCN_Spect(cfg)
         model.to(cfg.device)
-        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device))
+        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
         loss_fn  = Charbonnier_loss()
         
         output_path = os.path.join(cfg.log_dir, 'predictions')
@@ -133,6 +133,7 @@ def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Sp
             os.makedirs(output_path)
         
         testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
+        print(testset.meta)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
 
         model.init_patch_ls(testset[0]['img'].shape[-2:])

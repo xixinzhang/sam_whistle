@@ -49,11 +49,11 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
     )
     return spect_power_db # (freq, time)
 
-def normalize_spect(spect, method='minmax', min=None, max=None, mean =None, std = None, **kwargs):
+def normalize_spect(spect, method='minmax', min=None, max=None, **kwargs):
     if method == 'minmax':
         spect = (spect - spect.min()) / (spect.max() - spect.min())  # normalize to [0, 1]
     elif method == 'zscore':
-        spect = (spect - spect.mean()) / spect.std()  # normalize to zscore
+        spect = (spect - spect.mean()) / (spect.std() + + 1e-8) # normalize to zscore
     elif method == 'fixed_minmax':
         spect = (spect - min) / (max - min)
     else:

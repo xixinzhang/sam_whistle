@@ -114,3 +114,7 @@ def eval_tonal_map(pr, model_name):
         recalls=recalls.tolist(),
         thresholds=thresholds.tolist()
     )
+
+
+def f1_pr(precision, recall):
+    return 2 * (precision * recall) / (precision + recall + 1e-8)

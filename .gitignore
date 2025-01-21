@@ -13,3 +13,4 @@ silbido*/
 __pycache__
 *.pth
 *.egg-info
+*.log

@@ -25,7 +25,6 @@ class SpectConfig:
     # block
     split_ms: int = 3000
     block_size:int = split_ms // hop_ms
-    block_multi: int = 5
     # crop
     crop: bool = True
     max_freq: int = 50000
@@ -45,7 +44,6 @@ class PatchConfig(SpectConfig):
     patch_stride: int = 25
     cached_patches: bool = False
     balance_patches: bool = True
-
 
 @dataclass
 class SAMConfig:
@@ -71,7 +69,7 @@ class SAMConfig:
 
     num_workers: int = 8
     batch_size: int = 2
-    epochs: int = 20
+    epochs: int = 30
     encoder_lr: float = 5e-6
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5
@@ -149,7 +147,7 @@ class FCNEncoderConfig:
 
     encoder_lr: float = 1e-4
     decoder_lr: float = 1e-3
-    epochs: int = 50
+    epochs: int = 30
     freeze_img_encoder: bool = False
     freeze_mask_decoder: bool = False
 

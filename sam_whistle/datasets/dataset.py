@@ -12,9 +12,6 @@ import json
 from tqdm import tqdm
 import pickle
 import random
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
 from sam_whistle import utils, config
 from sam_whistle.config import DWConfig, SAMConfig
 
@@ -29,6 +26,63 @@ def custom_collate_fn(batch):
         'mask': default_collate(masks),
         'info': infos
     }
+
+
+class RandomBrightnessContrast:
+    def __init__(self, 
+                 brightness_limit=0.2,
+                 contrast_limit=0.2,
+                 brightness_prob=0.5,
+                 contrast_prob=0.5):
+        """
+        Args:
+            brightness_limit (float): Range for brightness adjustment [-limit, +limit]
+            contrast_limit (float): Range for contrast adjustment [-limit, +limit]
+            brightness_prob (float): Probability of applying brightness
+            contrast_prob (float): Probability of applying contrast
+        """
+        self.brightness_limit = brightness_limit
+        self.contrast_limit = contrast_limit
+        self.brightness_prob = brightness_prob
+        self.contrast_prob = contrast_prob
+    
+    def random_brightness(self, spec: np.ndarray):
+        """Apply brightness adjustment preserving precision"""
+        factor = 1.0 + (2 * np.random.random() - 1) * self.brightness_limit
+        return spec * factor
+    
+    def random_contrast(self, spec: np.ndarray):
+        """Apply contrast adjustment preserving precision"""
+        factor = 1.0 + (2 * np.random.random() - 1) * self.contrast_limit
+        mean = np.mean(spec, axis=(-2, -1), keepdims=True)
+        return (spec - mean) * factor + mean
+    
+    def __call__(self, spec: np.ndarray, debug=False):
+        """
+        Args:
+            spec: Input spectrogram (freq, time) or (batch, freq, time)
+            debug: If True, return debug info
+        """
+        original_range = (np.min(spec), np.max(spec))
+        original_mean = np.mean(spec)
+        
+        # Apply augmentations based on probability
+        if np.random.random() < self.brightness_prob:
+            spec = self.random_brightness(spec)
+        
+        if np.random.random() < self.contrast_prob:
+            spec = self.random_contrast(spec)
+            
+        if debug:
+            final_range = (np.min(spec), np.max(spec))
+            return spec, {
+                'original_range': original_range,
+                'final_range': final_range,
+                'original_mean': original_mean,
+                'final_mean': np.mean(spec)
+            }
+        
+        return spec
             
 class WhistleDataset(Dataset):
     def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3, transform=False):
@@ -48,21 +102,11 @@ class WhistleDataset(Dataset):
         self.interp = self.spect_cfg.interp
         self.spect_nchan = spect_nchan
 
-        trans = []
-        if transform:
-            if split == 'train':
-                trans.extend([
-                    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
-                    A.RandomGamma(gamma_limit=(80, 120), p=0.5),
-                    A.RandomToneCurve(scale=0.1, p=0.5),
-                ])
-            trans.append(
-                    A.Normalize(mean= 0.5, std = 0.5, max_pixel_value=1.0),
-            )
-        trans.append(ToTensorV2(transpose_mask = True))
-        self.transform = A.Compose(trans)
-
-
+        if transform and split == 'train':
+            self.transform = RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2)
+        else:
+            self.transform = None
+        
         self.raw_data = self._preprocess(cfg.save_pre)
         self.spect_lens = []
         self.data = self._get_data()
@@ -91,10 +135,7 @@ class WhistleDataset(Dataset):
 
     def __len__(self):
         if self.split == 'train':
-            if not self.debug and self.spect_cfg.block_multi > 1:
-                return len(self.train_blocks) * self.spect_cfg.block_multi
-            else:
-                return len(self.train_blocks)
+            return len(self.train_blocks)
         elif self.split == 'test':
             return len(self.test_blocks)
         else:
@@ -107,7 +148,7 @@ class WhistleDataset(Dataset):
             gt_mask: 1, H, W
         """
         if self.split == 'train':
-            if not self.debug and self.spect_cfg.block_multi > 1:
+            if not self.debug:
                 spect_idx = np.random.choice(len(self.data), p=self.spec_prob)
                 spec_len = self.spect_lens[spect_idx]
                 block_start = np.random.randint(0, spec_len - self.spect_cfg.block_size)
@@ -118,17 +159,17 @@ class WhistleDataset(Dataset):
         else:
             spect_idx, block_slice = self.test_blocks[idx]
 
-        spect = self.data[spect_idx]['img'][..., block_slice]
-        gt_mask = self.data[spect_idx]['mask'][..., block_slice]
+        spect = self.data[spect_idx]['img'][..., block_slice]  # [H, W]
+        gt_mask = self.data[spect_idx]['mask'][..., block_slice]  # [H, W]
 
         if spect.ndim == 2:
-            spect = np.stack([spect] * self.spect_nchan, axis=-1) # [H, W, C]
+            spect = np.stack([spect] * self.spect_nchan, axis=0) # [C, H, W]
         if gt_mask.ndim == 2:
-            gt_mask = np.expand_dims(gt_mask, 2)
+            gt_mask = np.expand_dims(gt_mask, 0) # [1, H, W]
 
-        transformed  = self.transform(image = spect, mask = gt_mask)
-        spect, gt_mask= transformed['image'], transformed['mask']
-        
+        if self.transform:
+            spect = self.transform(spect)
+
 
         data =  {
             "img": spect, 
@@ -227,7 +268,7 @@ class WhistleDataset(Dataset):
             else:
                 gt_mask = utils.skeletonize_mask(gt_mask)
 
-            spect = utils.normalize_spect(spect, self.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max, mean=self.cfg.spect_cfg.mean, std=self.cfg.spect_cfg.std)
+            spect = utils.normalize_spect(spect, self.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max)
             if self.spect_cfg.crop:
                 spect = spect[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
                 gt_mask = gt_mask[-self.spect_cfg.crop_top: -self.spect_cfg.crop_bottom+1, :]
@@ -332,7 +373,7 @@ class WhistlePatch(WhistleDataset):
 
         print(f'Positive patches: {len(self.pos_patches)}, Negative patches: {len(self.neg_patches)}')
         
-        if self.split == 'train' and  self.spect_cfg.balance_patches:
+        if split == 'train' and self.spect_cfg.balance_patches:
             balanced_size = min(len(self.pos_patches), len(self.neg_patches))
             if balanced_size <= len(self.neg_patches):
                 self.patch_data = self.pos_patches + random.sample(self.neg_patches, balanced_size)
@@ -356,12 +397,12 @@ class WhistlePatch(WhistleDataset):
         label = patch_meta['label']
 
         if patch.ndim == 2:
-            patch = np.stack([patch] * self.spect_nchan, axis=-1) # [H, W, C]
+            patch = np.stack([patch] * self.spect_nchan, axis=0) # [C, H, W, ]
         if patch_mask.ndim == 2:
-            patch_mask = np.expand_dims(patch_mask, 2)
+            patch_mask = np.expand_dims(patch_mask, 0) # [1, H, W]
 
-        transformed  = self.transform(image = patch, mask = patch_mask)
-        patch, patch_mask= transformed['image'], transformed['mask']
+        if self.transform:
+            patch = self.transform(patch)
 
         data = {
             'img': patch,

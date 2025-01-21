@@ -201,7 +201,6 @@ def run_fcn_spect(cfg: FCNSpectConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    assert cfg.spect_cfg.block_multi == 1, "Should use block_multi=1"
     trainset = WhistleDataset(cfg, 'train', spect_nchan=1, transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=1, shuffle=True, num_workers=cfg.num_workers, drop_last=False, collate_fn= custom_collate_fn)
     testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
@@ -304,7 +303,7 @@ def run_fcn_encoder(cfg: FCNEncoderConfig):
             img = img.to(cfg.device)
             mask = mask.to(cfg.device)
             pred = model(img)
-
+            
             batch_loss += loss_fn(pred, mask) / cfg.batch_size
             if (i+1) % cfg.batch_size == 0:
                 encoder_optimizer.zero_grad()

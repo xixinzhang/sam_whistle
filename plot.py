@@ -1,5 +1,5 @@
 from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch
-from sam_whistle.config import DWConfig
+from sam_whistle.config import DWConfig, SAMConfig
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import numpy as np
@@ -14,20 +14,20 @@ def plot_patch_grid():
     dpi = 300
     w += (ncols - 1) * space_pix / 300
     h += (nrows - 1) * space_pix / 300
-    fig = plt.figure(figsize=(w, h), dpi=300)
-    print(w, h)
+    fig = plt.figure(figsize=(w, h), dpi=dpi)
     gs = GridSpec(nrows, ncols, figure=fig, wspace=space_pix / subplot_width, hspace=space_pix / subplot_height)
 
     cfg = tyro.cli(DWConfig)
-    dataset = WhistlePatch(cfg, 'test')
+    dataset = WhistlePatch(cfg, 'train')
     sampled_data = random.sample(list(dataset), 240)
 
     for i in range(nrows):
         for j in range(ncols):
             idx = i * ncols + j
             ax = fig.add_subplot(gs[i, j])
-            img = sampled_data[idx]['img']
-            ax.imshow(img, cmap='bone', aspect="auto") 
+            img = sampled_data[idx]['img'][0]*300 - 200
+            # print(img.min(), img.max())
+            ax.imshow(img, cmap='bone', aspect="auto")
             ax.axis("off")
 
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
@@ -37,11 +37,13 @@ def plot_patch_grid():
 def plot_seg_grid():
     fig, ax = plt.subplots(1, 1, figsize=(15, 3.61), dpi=300)
 
-    cfg = tyro.cli(DWConfig)
+    cfg = tyro.cli(SAMConfig)
     dataset = WhistleDataset(cfg, 'test', spect_nchan=1)
-    # sample_idx = random.randint(0, len(dataset))
-    sample_idx = 59
-    img = dataset[sample_idx]['img']
+    sample_idx = random.randint(0, len(dataset))
+    sample_idx = 62
+    # print(sample_idx)
+    img = dataset[sample_idx]['img'][0]*300 - 200
+    # print(img.min(), img.max())
     ax.imshow(img, cmap='bone',aspect="auto")
 
     ax.set_position([0, 0, 1, 1])
