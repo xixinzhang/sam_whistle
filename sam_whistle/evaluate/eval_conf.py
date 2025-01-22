@@ -186,7 +186,7 @@ def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FC
     else:
         assert model is not None and testloader is not None and loss_fn is not None
         
-    # model.eval() # may not needed as batch size is 1, batch norm is unstable
+    model.eval() # may not needed as batch size is 1, batch norm is unstable
     batch_losses = []
     all_gts = []
     all_preds = []

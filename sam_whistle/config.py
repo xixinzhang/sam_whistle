@@ -69,7 +69,7 @@ class SAMConfig:
 
     num_workers: int = 8
     batch_size: int = 2
-    epochs: int = 30
+    epochs: int = 100
     encoder_lr: float = 5e-6
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5
@@ -145,9 +145,9 @@ class FCNEncoderConfig:
     lr: float = 1e-3
     batch_size: int = 2
 
-    encoder_lr: float = 1e-4
-    decoder_lr: float = 1e-3
-    epochs: int = 30
+    encoder_lr: float = 5e-6
+    decoder_lr: float = 1e-4
+    epochs: int = 100
     freeze_img_encoder: bool = False
     freeze_mask_decoder: bool = False
 
