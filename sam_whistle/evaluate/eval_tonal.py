@@ -39,7 +39,7 @@ def res_to_metric(res: TonalResults):
     excess = np.array(res.all_excess_s) / np.array(res.all_dura)
     excess_mean = np.mean(excess)
     excess_std = np.std(excess)
-    frag = res.dt_true_pos_valid / res.gt_matched_valid
+    frag = res.dt_true_pos_valid / (res.gt_matched_valid +  1e-8)
 
     stats = TonalStats(
         precision_valid=precision_valid,
@@ -64,7 +64,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
 
     if visualize:
         gt_tonals =[]
-        for anno in tracker.gt_tonals_missed_valid:
+        for anno in tracker.gt_tonals:  # gt_tonals, gt_tonals_missed_valid
             gt = utils.anno_to_spect_point(anno)
             gt_tonals.append(gt)
         gt_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, gt_tonals)
@@ -84,17 +84,21 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             pred_block = tracker.spect_map[::-1, col: col + tracker.block_size]
             pred_mask = (pred_block > tracker.thre).astype(int)
             gt_tonal_block = gt_tonal_mask[:, col: col + tracker.block_size]
+            gt_binary_block = (gt_tonal_block > 0).astype(int)
             pred_tonal_block = pred_tonal_mask[:, col: col + tracker.block_size]
+            pred_binary_block = (pred_tonal_block > 0).astype(int)
             block_peaks = [(peak[0], peak[1]- col) for peak in peaks  if peak[1] >= col and peak[1] < col + tracker.block_size]
             
             utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}')
             utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}')
             utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
             utils.plot_mask_over_spect(raw_block, pred_tonal_block, filename=f'{col}_2.pred_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
-            if len(block_peaks) > 0:
-                utils.plot_points_over_spect(raw_block, [block_peaks], filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
-            else:
-                utils.plot_spect(raw_block, filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
+            utils.plot_binary_mask(pred_binary_block, filename=f'{col}_7.pred_mask', save_dir=f'{output_dir}/{stem}')
+
+            # if len(block_peaks) > 0:
+            #     utils.plot_points_over_spect(raw_block, [block_peaks], filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
+            # else:
+            #     utils.plot_spect(raw_block, filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
         
     return res
 
@@ -108,10 +112,16 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
     else:
         raise ValueError("Invalid stems")
 
-    if not cfg.debug:
+    if max_thre == min_thre:
+        threshold_list = [max_thre]
+    elif not cfg.debug:
         threshold_list = np.linspace(min_thre, max_thre, thre_num, endpoint=True)
     else:
-        threshold_list = [0.3, 0.47, 0.9]
+        if model_name == 'graph_search':
+            threshold_list = [9.5, 10, 10.5]
+        else:
+            threshold_list = [0.2, 0.47, 0.99]
+
     prs = defaultdict(list)
 
     trackers = {}
@@ -132,6 +142,10 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         trackers[stem]= tracker
         print(f'{'#'*30} Finished Inference {'#'*30}')
 
+    log_path = os.path.join(cfg.log_dir, 'metrics_results.txt')
+    if os.path.exists(log_path):
+        os.remove(log_path)
+
     for thre in threshold_list:
         print(f"{'#'*30} Threshold: {thre} {'#'*30}")
         table = PrettyTable()
@@ -145,13 +159,18 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             recall = metrics.recall_valid
             prs[stem].append((precision, recall, thre))
             print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
-            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.2f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
+            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.4f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
         
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
-        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.2f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_std:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
+        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
+
+        with open(log_path, 'a') as f:
+            f.write(f"\n{'#'*30} Threshold: {thre} {'#'*30}\n")
+            f.write(str(table))
+            f.write('\n')
 
     for stem, pr in prs.items():
         eval_res = utils.eval_tonal_map(pr, model_name)
@@ -180,11 +199,12 @@ if __name__ == "__main__":
         eval_graph_search(cfg, model_name = args.model, stems=stem, min_thre=args.min_thre, max_thre=args.max_thre, thre_num=args.thre_num, output_dir=args.output_dir)
     else:
         eval_results = [
-            'logs/11-23-2024_15-19-19-sam/sam_results_tonal.pkl',
-            'logs/11-23-2024_15-27-33-deep_whistle/deep_results_tonal.pkl',
-            'logs/11-23-2024_15-39-59-fcn_spect/fcn_spect_results_tonal.pkl',
-            # 'logs/11-24-2024_03-02-50-fcn_encoder_imbalance/fcn_encoder_results_tonal.pkl'
-            'logs/graph_search/graph_search_results_tonal.pkl'
+            'logs/01-21-2025_19-51-29-sam/sam_results_tonal_all.pkl',
+            # 'logs/12-07-2024_16-13-46-zscore/sam_results_tonal_all.pkl',
+            'logs/01-21-2025_19-24-29-deep_whistle/deep_results_tonal_all.pkl',
+            'logs/01-21-2025_19-52-54-fcn_spect/fcn_spect_results_tonal_all.pkl',
+            'logs/01-21-2025_19-51-03-fcn_encoder/fcn_encoder_results_tonal_all.pkl',
+            'logs/graph_search/graph_search_results_tonal_all.pkl',
         ]
         eval_res_li = [pickle.load(open(res_file, 'rb')) for res_file in eval_results]
-        utils.plot_pr_curve(eval_res_li, 'logs', 'pr_curve_tonal.png')
+        utils.plot_pr_curve(eval_res_li, 'imgs', 'pr_curve_tonal_corner.png', xlim_min=0.5,  ylim_min=0.5, )

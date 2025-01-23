@@ -266,10 +266,17 @@ def visualize_array(
     random_colors=True,
     mask_alpha=0.6,
     left_margin_px=0,
+    right_margin_px=0,
+    top_margin_px=0,
     bottom_margin_px=0,
     x_ticks_lables=None,
     y_ticks_lables=None,
+    tick_size=12,
+    x_label=None,
+    y_label=None,
+    label_size=12,
     cmap="viridis",
+    dpi=100,
 ):
     """Visualizes an array (PyTorch tensor, NumPy array) with optional overlays (points, lines, shapes).
 
@@ -295,24 +302,25 @@ def visualize_array(
         array = np.moveaxis(array, 0, -1)  # Convert CHW -> HWC
 
     # Ensure values are in the correct range [0, 1] for float types
-    if array.dtype in FLOAT_TYPE and np.max(array) > 1:
+    if array.dtype in FLOAT_TYPE and (np.max(array) > 1 or np.min(array) < 0):
         raise ValueError("[Visualization] Array of float values should be normalized to range [0, 1]")
 
     # Validate the array shape
     if array.ndim not in [2, 3]:
         raise ValueError("Input array must have 2 (grayscale) or 3 (HWC) dimensions")
 
-    dpi = 100
     height, width = array.shape[:2]
     fig, ax = plt.subplots(
         figsize=(
-            (width+ 2 * left_margin_px) / dpi ,
-            (height + 2 * bottom_margin_px) / dpi  ,
+            (width+  left_margin_px + right_margin_px) / 100 ,
+            (height + top_margin_px + bottom_margin_px) / 100  ,
         ),
         dpi=dpi,
     )
-    left_margin_fraction = left_margin_px / (width + 2 * left_margin_px)
-    bottom_margin_fraction = bottom_margin_px / (height + 2 * bottom_margin_px)
+    left_margin_fraction = left_margin_px / (width + left_margin_px + right_margin_px)
+    right_margin_fraction = right_margin_px / (width + left_margin_px + right_margin_px)
+    top_margin_fraction = top_margin_px / (height +  top_margin_px + bottom_margin_px)
+    bottom_margin_fraction = bottom_margin_px / (height +  top_margin_px + bottom_margin_px)
     
     # Handle grayscale or mask visualization (HW)
     if array.ndim == 2:
@@ -376,28 +384,33 @@ def visualize_array(
     else:
         if x_ticks_lables is not None :
             if isinstance(x_ticks_lables, list):
-                x_ticks, x_labels = x_ticks_lables
-                ax.set_xticks(x_ticks, x_labels)
+                x_ticks, x_ticks_labels = x_ticks_lables
+                ax.set_xticks(x_ticks, x_ticks_labels, fontsize=tick_size)
             elif isinstance(x_ticks_lables, int):
                 x_ticks = np.linspace(0, width, x_ticks_lables, endpoint=True, dtype=int)
-                ax.set_xticks(x_ticks)
+                ax.set_xticks(x_ticks, fontsize=tick_size)
         if y_ticks_lables is not None:
             if isinstance(y_ticks_lables, list):
                 y_ticks, y_labels = y_ticks_lables
-                ax.set_yticks(y_ticks, y_labels)
+                ax.set_yticks(y_ticks, y_labels, fontsize=tick_size)
             elif isinstance(y_ticks_lables, int):
                 y_ticks = np.linspace(0, height, y_ticks_lables, endpoint=True, dtype=int)
-                ax.set_yticks(y_ticks)
+                ax.set_yticks(y_ticks, fontsize=tick_size)
+        
+        if x_label is not None:
+            ax.set_xlabel(x_label, fontsize=label_size)
+        if y_label is not None:
+            ax.set_ylabel(y_label, fontsize=label_size)
 
     plt.subplots_adjust(
-        left=left_margin_fraction, right=1 - left_margin_fraction, top=1 - bottom_margin_fraction, bottom=bottom_margin_fraction
+        left=left_margin_fraction, right=1 - right_margin_fraction, top=1 - top_margin_fraction, bottom=bottom_margin_fraction
     )
 
     if filename is not None and save_dir is not None:
         save_path = f"{save_dir}/{filename}.png"
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        fig.savefig(save_path)
+        fig.savefig(save_path, dpi=dpi)
         plt.close()
     else:
         plt.show()
@@ -405,7 +418,7 @@ def visualize_array(
 
 
 
-def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=False):
+def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=False, axis = False, dpi = 100):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -417,10 +430,30 @@ def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=F
         y_labels = y_ticks[::-1]
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
-    visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels])
+    if axis:
+        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+    else:
+        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+
+def plot_binary_mask(mask, filename=None, save_dir="outputs", pix_tick=False, axis = False, dpi = 100):
+    mask = mask.squeeze()
+    if not pix_tick:
+        y_ticks = np.linspace(0, mask.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = np.linspace(5, 50, num=10, endpoint=True, dtype=int)[::-1]
+        x_ticks = np.linspace(0, mask.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = np.round(np.linspace(0, 3, num=20, endpoint=True), 2)
+    else:
+        y_ticks = np.linspace(0, mask.shape[0] - 1, num=10, endpoint=True, dtype=int)
+        y_labels = y_ticks[::-1]
+        x_ticks = np.linspace(0, mask.shape[1] - 1, num=20, endpoint=True, dtype=int)
+        x_labels = x_ticks
+    if axis:
+        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+    else:
+        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
 
-def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False):
+def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 100):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -432,9 +465,12 @@ def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='b
         y_labels = y_ticks[::-1]
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
-    visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels])
+    if axis:
+        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+    else:
+        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
-def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False):
+def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 100):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -446,11 +482,18 @@ def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cma
         y_labels = y_ticks[::-1]
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
-    visualize_array(spect, filename, save_dir, cmap=cmap, points=points,  point_kwargs=[{
-        "c": "green",
-        # "marker": "*",
-        "s": 1,
-    }],left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], )
+    if axis:
+        visualize_array(spect, filename, save_dir, cmap=cmap, points=points,  point_kwargs=[{
+            "c": "green",
+            # "marker": "*",
+            "s": 1,
+        }],left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], )
+    else:
+        visualize_array(spect, filename, save_dir, cmap=cmap, points=points,  point_kwargs=[{
+            "c": "green",
+            # "marker": "*",
+            "s": 1,
+        }],left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], )
 
 
 if __name__ == '__main__':

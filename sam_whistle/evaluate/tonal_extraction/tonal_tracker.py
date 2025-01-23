@@ -176,21 +176,10 @@ class TonalTracker:
         block_size = cfg.spect_cfg.block_size
         start_cols = self.start_cols
 
-        if cfg.spect_cfg.transform:
-            transform = A.Compose([
-                A.Normalize(mean=cfg.spect_cfg.mean, std=cfg.spect_cfg.std, max_pixel_value=1.0),
-                ToTensorV2()
-            ])
-        else:
-            transform = A.Compose([
-                ToTensorV2()
-            ])
-
         for start in start_cols:
             end = start + block_size
             block = spect_map[..., start:end]  # (H, W)
-            block = transform(image=block)['image']
-            block = torch.cat([block, block, block], axis=0).to(cfg.device).unsqueeze(0) # (1, 3, H, W)
+            block = torch.tensor(np.stack([block, block, block], axis=0)).to(cfg.device).unsqueeze(0) # (1, 3, H, W)
             pred = model(block).cpu().numpy().squeeze()
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
@@ -206,7 +195,10 @@ class TonalTracker:
         model.to(cfg.device)
 
         # Load model weights
-        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device, weights_only=True))
+        if os.path.exists(os.path.join(cfg.log_dir, 'model_more.pth')):
+            model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model_more.pth'), map_location=cfg.device, weights_only = True))
+        else:
+            model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
         model.eval()
 
         # Inferences
@@ -230,20 +222,9 @@ class TonalTracker:
         i_grid, j_grid = torch.meshgrid(i_starts, j_starts, indexing='ij')
         patch_starts = torch.stack([i_grid.flatten(), j_grid.flatten()], dim=-1)
 
-        if cfg.spect_cfg.transform:
-            transform = A.Compose([
-                A.Normalize(mean=cfg.spect_cfg.mean, std=cfg.spect_cfg.std, max_pixel_value=1.0),
-                ToTensorV2()
-            ])
-        else:
-            transform = A.Compose([
-                ToTensorV2()
-            ])
-
         for i, j in patch_starts:
             patch = spect_map[..., i:i+patch_size, j:j+patch_size]
-            patch = transform(image=patch)['image']
-            patch = patch.unsqueeze(0).to(cfg.device)
+            patch = torch.tensor(patch).unsqueeze(0).to(cfg.device).unsqueeze(0) # (1, 1, H, W)
             pred = model(patch).cpu().numpy().squeeze()
             pred_mask[i:i+patch_size, j:j+patch_size] += pred
             weights[i:i+patch_size, j:j+patch_size] += 1
@@ -261,7 +242,11 @@ class TonalTracker:
         model.to(cfg.device)
 
         # Load model weights
-        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device, weights_only=True))
+        if os.path.exists(os.path.join(cfg.log_dir, 'model_more.pth')):
+            model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model_more.pth'), map_location=cfg.device, weights_only = True))
+        else:
+            model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
+        
         # Inferences
         model.eval()
         spect_map =self.spect_map
@@ -272,33 +257,18 @@ class TonalTracker:
         start_cols = self.start_cols
         
         model.init_patch_ls((spect_map.shape[-2], block_size))
-        
-
-        if cfg.spect_cfg.transform:
-            transform = A.Compose([
-                A.Normalize(mean=cfg.spect_cfg.mean, std=cfg.spect_cfg.std, max_pixel_value=1.0),
-                ToTensorV2()
-            ])
-        else:
-            transform = A.Compose([
-                ToTensorV2()
-            ])
 
         for start in start_cols:
             end = start + block_size
             block = spect_map[..., start:end]  # (H, W)
-            block = transform(image=block)['image']
-            block = torch.tensor(block).unsqueeze(0).to(cfg.device)
+            block = torch.tensor(block).unsqueeze(0).to(cfg.device).unsqueeze(0) # (1, 1, H, W)
             pred = model(block).cpu().numpy().squeeze()
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
 
         pred_mask /= weights            
         self.spect_map = pred_mask
-        print(pred_mask.shape, pred_mask.min(), pred_mask.max())
-        print(f'thre 0.01 {(pred_mask>=0.01).sum()}')
-        print(f'thre 0.5 {(pred_mask>0.5).sum()}')
-        print(f'thre 0.99 {(pred_mask>0.99).sum()}')
+
 
     @torch.no_grad()
     def fcn_encoder_inference(self,):
@@ -308,10 +278,10 @@ class TonalTracker:
         model.to(cfg.device)
 
         # Load model weights
-        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'), weights_only=True))
+        model.load_state_dict(torch.load(os.path.join(self.log_dir, 'model.pth'),map_location=cfg.device, weights_only=True))
 
         # Inferences
-        # model.eval()
+        model.eval()
         spect_map =self.spect_map
         pred_mask = np.zeros_like(spect_map)
         weights = np.zeros_like(spect_map)
@@ -325,9 +295,8 @@ class TonalTracker:
 
         for start in start_cols:
             end = start + block_size
-            block = spect_map[:, start:end]
-            block = torch.tensor(block).unsqueeze(0).to(cfg.device)
-            block = block.unsqueeze(0)
+            block = spect_map[..., start:end]
+            block = torch.tensor(block).unsqueeze(0).to(cfg.device).unsqueeze(0) # (1, 1, H, W)
             pred = model(block).cpu().numpy().squeeze()
             pred_mask[::-1, start:end] += pred
             weights[:, start:end] += 1
@@ -355,7 +324,7 @@ class TonalTracker:
         peaks = [p for p in peaks if spectrum[p] >= thre]
         peaks = utils.consolidate_peaks(peaks, spectrum, min_gap=self.cfg.peak_dis_thr)
         peak_num = len(peaks)
-        # print(self.current_win_idx, peaks)
+        
         if peak_num > 0:
             increase = (peak_num - self.pre_peak_num) / self.H
             if increase > self.cfg.broadband:
@@ -364,7 +333,8 @@ class TonalTracker:
                 self.current_peaks = peaks
                 self.current_peaks_freq = peaks * self.freq_bin + self.offset_Hz
                 self.pre_peak_num = peak_num
-        return peaks.tolist()
+                return peaks.tolist()
+        return []
 
 
     def _prune_and_extend(self):
@@ -386,7 +356,6 @@ class TonalTracker:
         assert self.thre > 1 if not self.cfg.use_conf else True, "Threshold must be greater than 1"
         while self.current_win_idx < self.W:
             found_peaks = self._select_peaks(self.spect_map[:, self.current_win_idx], thre=self.thre, order=self.cfg.order)
-            print(self.current_win_idx, len(found_peaks))
             if found_peaks:
                 self._prune_and_extend()
                 all_peaks.extend([(self.H - p, self.current_win_idx, ) for p in found_peaks])

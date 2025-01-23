@@ -85,7 +85,7 @@ class RandomBrightnessContrast:
         return spec
             
 class WhistleDataset(Dataset):
-    def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3, transform=False):
+    def __init__(self, cfg: SAMConfig, split='train', spect_nchan=3, transform=False, audio= None):
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.debug = cfg.debug
@@ -95,8 +95,12 @@ class WhistleDataset(Dataset):
         self.processed_dir = self.root_dir / 'processed'    
         self.audio_dir = self.root_dir / 'audio'
         self.anno_dir = self.root_dir / 'anno'
-        self.meta_file = self.root_dir / self.cfg.meta_file
-        self.meta = self._get_dataset_meta()
+        if audio is None:
+            self.meta_file = self.root_dir / self.cfg.meta_file
+            self.meta = self._get_dataset_meta()
+        else:
+            self.meta = audio if isinstance(audio, list) else [audio]
+
         self.idx2file = {i: stem for i, stem in enumerate(self.meta)}
 
         self.interp = self.spect_cfg.interp
@@ -309,8 +313,8 @@ class WhistleDataset(Dataset):
 
 
 class WhistlePatch(WhistleDataset):
-    def __init__(self, cfg: DWConfig, split='train', spect_nchan=1, transform=False):
-        super().__init__(cfg, split, spect_nchan=spect_nchan, transform=transform)
+    def __init__(self, cfg: DWConfig, split='train', spect_nchan=1, transform=False, audio=None):
+        super().__init__(cfg, split, spect_nchan=spect_nchan, transform=transform, audio=audio)
         self.cfg = cfg
         self.spect_cfg = cfg.spect_cfg
         self.patch_size = self.spect_cfg.patch_size

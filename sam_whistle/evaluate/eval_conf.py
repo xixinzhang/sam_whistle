@@ -10,6 +10,7 @@ from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, asdict
 from tqdm import tqdm
+import json
 
 
 from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
@@ -20,7 +21,7 @@ from sam_whistle import utils
 from sam_whistle.utils.visualize import visualize
 
 @torch.no_grad()
-def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name='', audio = None):
     if load:
         model = SAM_whistle(cfg)
         model.to(cfg.device)
@@ -36,7 +37,7 @@ def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = Non
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test', transform=cfg.spect_cfg.transform)
+        testset = WhistleDataset(cfg, 'test', transform=cfg.spect_cfg.transform, audio=audio)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
 
         if cfg.loss_fn == "mse":
@@ -80,7 +81,7 @@ def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = Non
 
 
 @torch.no_grad()
-def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name='', audio = None):
     if load:
         model = Detection_ResNet_BN2(cfg.width)
         model.to(cfg.device)
@@ -90,7 +91,7 @@ def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = Non
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistlePatch(cfg, 'test', transform=cfg.spect_cfg.transform)
+        testset = WhistlePatch(cfg, 'test', transform=cfg.spect_cfg.transform, audio=audio)
         testloader = DataLoader(testset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
         loss_fn  = Charbonnier_loss()
     else:
@@ -121,19 +122,21 @@ def evaluate_deep_prediction(cfg: DWConfig, load=False, model: SAM_whistle = Non
         return test_loss
     
 @torch.no_grad()
-def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Spect = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Spect = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name='', audio = None):
     if load:
         model = FCN_Spect(cfg)
         model.to(cfg.device)
-        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
+        if os.path.exists(os.path.join(cfg.log_dir, 'model_more.pth')):
+            model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model_more.pth'), map_location=cfg.device, weights_only = True))
+        else:
+            model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'), map_location=cfg.device, weights_only = True))
         loss_fn  = Charbonnier_loss()
         
         output_path = os.path.join(cfg.log_dir, 'predictions')
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
-        print(testset.meta)
+        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform, audio=audio)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
 
         model.init_patch_ls(testset[0]['img'].shape[-2:])
@@ -168,18 +171,18 @@ def evaluate_fcn_spect_prediction(cfg: FCNSpectConfig, load=False, model: FCN_Sp
         return test_loss
     
 @torch.no_grad()
-def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FCN_Spect = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name=''):
+def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FCN_Spect = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name='', audio = None):
     if load:
         model = FCN_encoder(cfg)
         model.to(cfg.device)
-        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth')))
+        model.load_state_dict(torch.load(os.path.join(cfg.log_dir, 'model.pth'),map_location=cfg.device, weights_only=True))
         loss_fn = DiceLoss()
 
         output_path = os.path.join(cfg.log_dir, 'predictions')
         if not os.path.exists(output_path) and visualize_eval:
             os.makedirs(output_path)
         
-        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform)
+        testset = WhistleDataset(cfg, 'test',spect_nchan=1, transform=cfg.spect_cfg.transform, audio=audio)
         testloader = DataLoader(testset, batch_size=1, shuffle=False, num_workers=cfg.num_workers, collate_fn=custom_collate_fn)
         print(f"Test set size: {len(testset)}")
         model.init_patch_ls()
@@ -211,16 +214,16 @@ def evaluate_fcn_encoder_prediction(cfg: FCNEncoderConfig, load=False, model: FC
         return test_loss
 
 
-def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SAM', visualize_eval=False, visualize_name='', min_thre = 0, max_thre=1, pr_name='pr_curve'):
-    test_loss, all_gts, all_preds = eval_fn(cfg, load= True, visualize_eval = visualize_eval, visualize_name=visualize_name)
+def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SAM', visualize_eval=False, visualize_name='', min_thre = 0, max_thre=1, pr_name='pr_curve', audio=None):
+    test_loss, all_gts, all_preds = eval_fn(cfg, load= True, visualize_eval = visualize_eval, visualize_name=visualize_name, audio = audio)
     eval_res = utils.eval_conf_map(all_gts, all_preds, model_name, min_thre, max_thre)
     print(f"Test Loss: {test_loss:.3f}")
     print(f"Precision: {eval_res.precision:.3f}, Recall: {eval_res.recall:.3f}, F1: {eval_res.f1:.3f}, Threshold: {eval_res.threshold:.3f}")
     
-    with open(os.path.join(cfg.log_dir, f'{model_name}_results.pkl'), 'wb') as f:
+    with open(os.path.join(cfg.log_dir, f'{model_name}_results_pix{'-'+audio if audio is not None else ''}.pkl'), 'wb') as f:
         pickle.dump(eval_res, f)
     
-    utils.plot_pr_curve([eval_res], cfg.log_dir, figname=f'{pr_name}')
+    utils.plot_pr_curve([eval_res], cfg.log_dir, figname=f'{pr_name}_pix{'-'+ audio if audio is not None else ''}.png')
 
 
 
@@ -233,29 +236,51 @@ if __name__ == "__main__":
     parser.add_argument('--visual_name', type=str, default='', help='Name of the visualized file')
     parser.add_argument('--min_thre', type=float, default=0.01, help='Minimum threshold for filtering')
     parser.add_argument('--max_thre', type=float, default=0.99, help='Maximum threshold for filtering')
+    parser.add_argument('--single_audio',action = 'store_true', help='Audio file to evaluate')
     args, remaining = parser.parse_known_args()
     if not args.eval_multiple:
         if args.model == 'sam':
             cfg = tyro.cli(SAMConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn=evaluate_sam_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            if args.single_audio:
+                stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
+                for stem in stems:
+                    evaluate_conf_map(cfg, eval_fn=evaluate_sam_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre, audio=stem)
+            else:
+                evaluate_conf_map(cfg, eval_fn=evaluate_sam_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model == 'deep':
             cfg = tyro.cli(DWConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            if args.single_audio:
+                stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
+                for stem in stems:
+                    evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre, audio=stem)
+            else:
+                evaluate_conf_map(cfg, eval_fn= evaluate_deep_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model == 'fcn_spect':
             cfg = tyro.cli(FCNSpectConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_spect_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            if args.single_audio:
+                stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
+                for stem in stems:
+                    evaluate_conf_map(cfg, eval_fn= evaluate_fcn_spect_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre, audio=stem)
+            else:
+                evaluate_conf_map(cfg, eval_fn= evaluate_fcn_spect_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         elif args.model=='fcn_encoder':
             cfg = tyro.cli(FCNEncoderConfig, args=remaining)
-            evaluate_conf_map(cfg, eval_fn= evaluate_fcn_encoder_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
+            if args.single_audio:
+                stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
+                for stem in stems:
+                    evaluate_conf_map(cfg, eval_fn= evaluate_fcn_encoder_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre, audio=stem)
+            else:
+                evaluate_conf_map(cfg, eval_fn= evaluate_fcn_encoder_prediction, model_name=args.model, visualize_eval=args.visual, visualize_name=args.visual_name, min_thre=args.min_thre, max_thre=args.max_thre)
         else:
             raise ValueError(f"Model {args.model} not found")
         
     else:
         eval_results = [
-            'logs/11-23-2024_15-19-19-sam/sam_results.pkl',
-            'logs/11-23-2024_15-27-33-deep_whistle/deep_results.pkl',
-            'logs/11-23-2024_15-39-59-fcn_spect/fcn_spect_results.pkl',
-            'logs/11-24-2024_03-02-50-fcn_encoder_imbalance/fcn_encoder_results.pkl'
+            'logs/01-21-2025_19-51-29-sam/sam_results.pkl',
+            # 'logs/12-07-2024_16-13-46-zscore/sam_results.pkl',
+            'logs/01-21-2025_19-24-29-deep_whistle/deep_results.pkl',
+            'logs/01-21-2025_19-52-54-fcn_spect/fcn_spect_results.pkl',
+            'logs/01-21-2025_13-30-49-fcn_encoder/fcn_encoder_results.pkl'
         ]
         eval_res_li = [pickle.load(open(res_file, 'rb')) for res_file in eval_results]
-        utils.plot_pr_curve(eval_res_li, 'logs')
+        utils.plot_pr_curve(eval_res_li, 'imgs', 'pr_curve_pix.png')

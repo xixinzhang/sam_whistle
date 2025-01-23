@@ -6,6 +6,8 @@ from matplotlib.legend_handler import HandlerTuple
 from dataclasses import dataclass, asdict
 from typing import Dict, List
 import os
+from matplotlib import rcParams
+import seaborn as sns
 
 @dataclass
 class PR_Results:
@@ -20,41 +22,125 @@ class PR_Results:
     thresholds: List[float]
 
 
-def plot_pr_curve(eval_res_li:list[PR_Results], fig_dir:str, figname='pr_curve.png'):
+def plot_pr_curve(eval_res_li: list, fig_dir: str, figname='pr_curve.jpg', xlim_min=None, xlim_max=None, ylim_min=None, ylim_max=None, legend = True):
+    # Set the style to match Nature's guidelines
+    plt.style.use('seaborn-v0_8-white')
     
-    plt.figure(figsize=(10, 8))
-    precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), np.linspace(0.01, 1, 100))
+    # Set font to Arial (Nature's preferred font)
+    rcParams['font.family'] = 'sans-serif'
+    rcParams['font.sans-serif'] = ['Arial']
+    
+    # Create figure with high DPI for print quality
+    plt.figure(figsize=(6, 6), dpi=300)
+    
+    # Create color palette
+    colors = sns.color_palette('husl', n_colors=len(eval_res_li))
+    
+    # Create precision-recall grid for F1 score contours
+    precision_grid, recall_grid = np.meshgrid(np.linspace(0.01, 1, 100), 
+                                            np.linspace(0.01, 1, 100))
     f1_grid = 2 * (precision_grid * recall_grid) / (precision_grid + recall_grid)
-    f1_contour = plt.contour(recall_grid, precision_grid, f1_grid, levels=np.linspace(0.1, 0.9, 9), colors='green', linestyles='dashed')
-
-    legend_handles1 = []
-    legend_handles2 = []
-    legend_labels1 = []
-    legend_labels2 = []
-    for eval_res in eval_res_li:
-        line,  = plt.plot(eval_res.recalls, eval_res.precisions, )
-        plt.scatter(eval_res.recall, eval_res.precision, zorder=5)
-        legend_handles1.append(Line2D([0], [0], color= line.get_color(), lw=2))
-        legend_handles2.append(Line2D([], [], marker='o', color = line.get_color(), lw=0, linestyle='None', markersize=8))
-
-        legend_labels1.append(eval_res.model_name)
-        legend_labels2.append(f'F1: {eval_res.f1:.3f}, Thre: {eval_res.threshold:.3f}')
+    
+    # Plot F1 score contours with refined styling
+    f1_contour = plt.contour(recall_grid, precision_grid, f1_grid,
+                            levels=np.linspace(0.2, 0.9, 8), 
+                            colors='gray',
+                            linestyles='dashed',
+                            linewidths=0.8,
+                            alpha=0.6)
+    
+    # Initialize legend handles and labels
+    legend_handles1, legend_handles2 = [], []
+    legend_labels1, legend_labels2 = [], []
+    
+    # Plot PR curves for each model
+    for idx, eval_res in enumerate(eval_res_li):
         
+        line, = plt.plot(eval_res.recalls, 
+                        eval_res.precisions,
+                        color=colors[idx],
+                        linewidth=2,
+                        alpha=0.9,
+                        zorder=2*idx+1)
+        
+        # Plot optimal point with refined styling
+        plt.scatter(eval_res.recall,
+                   eval_res.precision,
+                   color=colors[idx],
+                   s=25,
+                   zorder=5)
+        
+        # Create legend entries
+        legend_handles1.append(Line2D([0], [0], color=colors[idx], lw=2))
+        legend_handles2.append(Line2D([], [], 
+                                    marker='o',
+                                    color=colors[idx],
+                                    lw=0,
+                                    markersize=8,
+                                    markeredgecolor='white',
+                                    markeredgewidth=1.5))
+        
+        if legend:
+            legend_labels1.append(eval_res.model_name)
+            legend_labels2.append(f'Optimal F1: {eval_res.f1:.3f} ({r'$\tau$'}={eval_res.threshold:.3f})')
+    
+    # Combine legend handles and labels
     legend_handles = legend_handles1 + legend_handles2
     legend_labels = legend_labels1 + legend_labels2
     
-    plt.clabel(f1_contour, fmt='%.2f', inline=True, fontsize=10)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curves')
-    # for i in range(0, len(legend_handles), 2):
-    #     plt.legend(handles = legend_handles[i:i+2], labels=legend_labels[i:i+2], loc = 'lower left', fontsize=10, ncol=2, frameon=False)
-    plt.legend(handles = legend_handles, labels=legend_labels, loc = 'lower left', fontsize=10, ncols=2)
-    plt.grid(True)
-    plt.xticks(np.arange(0, 1.1, 0.1))
-    plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.savefig(os.path.join(fig_dir, figname))
+    # Add contour labels with refined styling
+    plt.clabel(f1_contour,
+               fmt='%.1f',
+               inline=True,
+               fontsize=8,
+               colors='dimgray')
+    
+    # Customize axes
+    plt.xlabel('Recall', fontsize=12, labelpad=10)
+    plt.ylabel('Precision', fontsize=12, labelpad=10)
+    # plt.title('Precision-Recall Curves', fontsize=14, pad=15)
+    
+    # Add legend with refined styling
+    if legend:
+        plt.legend(handles=legend_handles,
+                labels=legend_labels,
+                loc='lower left',
+                fontsize=9,
+                ncol=2,
+                frameon=True,
+                fancybox=False,
+                edgecolor='black',
+                bbox_to_anchor=(0, 0),
+                framealpha=0.5,
+                columnspacing=0.5)
+    
+    # Customize grid
+    plt.grid(True, linestyle='--', alpha=0.3, color='gray')
+    
+    xlim_min = xlim_min if xlim_min is not None else 0
+    xlim_max = xlim_max if xlim_max is not None else 1.02
+    ylim_min = ylim_min if ylim_min is not None else 0
+    ylim_max = ylim_max if ylim_max is not None else 1.02
+    
+    plt.xlim(xlim_min, xlim_max)
+    plt.ylim(ylim_min, ylim_max)
+    
+    # Adjust tick spacing based on the range
+    x_range = xlim_max - xlim_min
+    y_range = ylim_max - ylim_min
+    
+    plt.xticks(np.arange(np.floor(xlim_min*10)/10, xlim_max+0.01, 0.1), fontsize=10)
+    plt.yticks(np.arange(np.floor(ylim_min*10)/10, ylim_max+0.01, 0.1), fontsize=10)
+
+    # Adjust layout and save
+    plt.tight_layout()
+    
+    # Save in high quality PDF (vector format preferred for publication)
+    plt.savefig(os.path.join(fig_dir, figname),
+                dpi=300,
+                bbox_inches='tight',)
     plt.close()
+
 
 
 def eval_conf_map(y_true: np.ndarray, 
