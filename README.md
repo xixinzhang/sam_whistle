@@ -1,4 +1,4 @@
-## Segment any whistle using foundational model SAM
+## SAM-Whistle: Adapting Foundation Models for Automated Dolphin Whistle Detection
 
 ## Install
 ```
@@ -11,19 +11,10 @@ pip install -e ./segment-anything/
 `conda install ffmpeg`
 
 
-## Data processing
-no skeleton, no crop
-```shell
-python sam_whistle/datasets/dataset.py --preprocess --all_data --spect_cfg.block_multi 1 --debug --spect_cfg.interp linear --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.kernel_size 2
-```
-
 ## Training & Inference
 training
 ```shell
-python sam_whistle/main.py --model sam --batch_size 2 --device cuda:0 --spect_cfg.block_multi 3 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
-python sam_whistle/main.py --model deep --spect_cfg.block_multi 1 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
-python sam_whistle/main.py --model fcn_spect --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
-python sam_whistle/main.py --model fcn_encoder --spect_cfg.block_multi 1 --batch_size 2 --device cuda:0 --spect_cfg.normalize fixed_minmax --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 2
+python sam_whistle/main.py --model sam --batch_size 2 --device cuda:0 --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3
 ```
 inference
 ```shell
@@ -31,19 +22,13 @@ inference
 ## evaluation
 1. pixel-level
 ```shell
-python sam_whistle/evaluate/eval_conf.py --model sam --spect_cfg.normalize zscore  --spect_cfg.no_center --log_dir logs/12-10-2024_00-24-24-zscore_no_center
-python sam_whistle/evaluate/eval_conf.py --model deep --log_dir logs/11-23-2024_15-27-33-deep_whistle
-python sam_whistle/evaluate/eval_conf.py --model fcn_spect --log_dir logs/11-23-2024_15-39-59-fcn_spect
-python sam_whistle/evaluate/eval_conf.py --model fcn_encoder --log_dir logs/11-24-2024_03-02-50-fcn_encoder
+python sam_whistle/evaluate/eval_conf.py --model sam --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-51-29-sam
 ```
 2. tonal-wise
-1. extract tonal
 ```shell
-python sam_whistle/evaluate/tonal_extraction/tonal_tracker.py
-```
-2. evaluate
-```shell
-python sam_whistle/evaluate/eval_tonal.py --use_conf --model sam --spect_cfg.normalize zscore --spect_cfg.no_center  --log_dir logs/11-16-2024_09-28-58  # 1e-10
+python sam_whistle/evaluate/eval_tonal.py --use_conf --model sam --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-51-29-sam --min_thre 0.01 --max_thre 0.99 --thre_num 20
 ```
 ## Acknowledgement
 - [segment-anything](https://github.com/facebookresearch/segment-anything)
+- [DeepWhistle](https://github.com/Paul-LiPu/DeepWhistle)
+- [silbido](https://github.com/MarineBioAcousticsRC/silbido)

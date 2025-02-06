@@ -10,6 +10,8 @@ import json
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.utils as vutils
 from dataclasses import asdict
+from torchinfo import summary
+
 
 from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch, custom_collate_fn
 from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
@@ -37,6 +39,10 @@ def run_sam(cfg: SAMConfig):
     writer = SummaryWriter(cfg.log_dir)
     # Load model
     model = SAM_whistle(cfg)
+    # summary(model.img_encoder, input_size=(1, 3, 1024, 1024))
+    # summary(model.decoder, input_size=(1, 256, 64, 64))
+    # exit()
+
     model.to(cfg.device)
     # optimizer
     if cfg.loss_fn == "mse":

@@ -23,3 +23,10 @@ python sam_whistle/evaluate/eval_tonal.py --use_conf --model fcn_encoder --spect
 python sam_whistle/evaluate/eval_tonal.py --model graph_search --spect_cfg.normalize zscore  --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/graph_search --min_thre 9.5 --max_thre 10.5 --thre_num 20
 
 python sam_whistle/evaluate/eval_tonal.py --eval_multiple
+
+# visulize extraction
+python sam_whistle/evaluate/eval_tonal.py --use_conf --model sam --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-51-29-sam --min_thre 0.06939393939393938 --max_thre 0.06939393939393938 --visualize --output_dir outputs/paper/sam
+python sam_whistle/evaluate/eval_tonal.py --use_conf --model deep --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-24-29-deep_whistle --min_thre 0.45545454545454545 --max_thre 0.45545454545454545 --visualize --output_dir outputs/paper/deep
+python sam_whistle/evaluate/eval_tonal.py --use_conf --model fcn_spect --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-52-54-fcn_spect --min_thre 0.2673737373737374 --max_thre 0.2673737373737374 --visualize --output_dir outputs/paper/fcn_spect
+python sam_whistle/evaluate/eval_tonal.py --use_conf --model fcn_encoder --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/01-21-2025_19-51-03-fcn_encoder --min_thre 0.059494949494949496 --max_thre 0.059494949494949496 --visualize --output_dir outputs/paper/fcn_encoder
+python sam_whistle/evaluate/eval_tonal.py --model graph_search --spect_cfg.normalize zscore  --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/graph_search --min_thre 9.681818181818182 --max_thre 9.681818181818182 --visualize --output_dir outputs/paper/graph_search

@@ -353,7 +353,17 @@ def visualize_array(
                 color = class_colors[cls]
             elif random_colors:
                 # Assign random color for classes not specified
-                random_color = np.random.rand(3,)  # Random RGB color
+                # random_color = np.random.rand(3,)  # Random RGB color
+                # color = np.concatenate([random_color, np.array([mask_alpha])], axis=0)
+                colors = [
+                    (1.0, 0.0, 0.0),     # Pure red
+                    (0.0, 1.0, 0.0),     # Pure green
+                    (1.0, 0.0, 1.0),     # Magenta
+                    (1.0, 0.84, 0.0),    # Gold
+                    (0.0, 1.0, 1.0),     # Cyan
+                    (1.0, 0.55, 0.0)     # Dark orange
+                ]
+                random_color = np.array(colors[np.random.randint(0, len(colors))])
                 color = np.concatenate([random_color, np.array([mask_alpha])], axis=0)
             else:
                 color = np.array(mask_color) / 255  # Default color
@@ -418,7 +428,7 @@ def visualize_array(
 
 
 
-def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=False, axis = False, dpi = 100):
+def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=False, axis = False, dpi = 300):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -431,11 +441,11 @@ def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=F
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
     else:
         visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
-def plot_binary_mask(mask, filename=None, save_dir="outputs", pix_tick=False, axis = False, dpi = 100):
+def plot_binary_mask(mask, filename=None, save_dir="outputs", pix_tick=False, axis = False, dpi = 300):
     mask = mask.squeeze()
     if not pix_tick:
         y_ticks = np.linspace(0, mask.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -448,12 +458,12 @@ def plot_binary_mask(mask, filename=None, save_dir="outputs", pix_tick=False, ax
         x_ticks = np.linspace(0, mask.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
     else:
         visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
 
-def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 100):
+def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 300):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -466,11 +476,11 @@ def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='b
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
+        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
     else:
         visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
-def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 100):
+def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cmap='bone', random_colors=False, pix_tick=False, axis = False, dpi = 300):
     spect = utils.normalize_spect(spect, method='minmax')
     if not pix_tick:
         y_ticks = np.linspace(0, spect.shape[0] - 1, num=10, endpoint=True, dtype=int)
@@ -487,7 +497,7 @@ def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cma
             "c": "green",
             # "marker": "*",
             "s": 1,
-        }],left_margin_px=30, bottom_margin_px=30, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], )
+        }],left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], x_label='Time (s)', y_label='Frequency (kHz)')
     else:
         visualize_array(spect, filename, save_dir, cmap=cmap, points=points,  point_kwargs=[{
             "c": "green",

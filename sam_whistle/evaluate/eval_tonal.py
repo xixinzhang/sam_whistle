@@ -8,6 +8,7 @@ from prettytable import PrettyTable
 from itertools import chain
 import cv2 
 from dataclasses import dataclass, asdict
+from datetime import datetime
 
 from sam_whistle.config import TonalConfig
 from sam_whistle.evaluate.tonal_extraction.tonal_tracker import TonalTracker, TonalResults
@@ -55,7 +56,7 @@ def res_to_metric(res: TonalResults):
     )
     return stats
 
-def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None, stem=None):
+def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None, stem=None, axis=False):
     tracker.reset()
     tracker.thre = thre
     peaks = tracker.build_graph()
@@ -63,12 +64,13 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
     res = tracker.compare_tonals()
 
     if visualize:
+        print(f"{'#'*30} Visualizing {stem} {'#'*30} to {output_dir}")
         gt_tonals =[]
-        for anno in tracker.gt_tonals:  # gt_tonals, gt_tonals_missed_valid
+        for anno in tracker.gt_tonals_valid:  # gt_tonals, gt_tonals_missed_valid, gt_tonals_valid
             gt = utils.anno_to_spect_point(anno)
             gt_tonals.append(gt)
         gt_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, gt_tonals)
-        kernel = np.ones((3, 3), np.uint8)
+        kernel = np.ones((4, 4), np.uint8)
         gt_tonal_mask = cv2.dilate(gt_tonal_mask, kernel, iterations=1).astype(int)
         gt_tonal_mask = gt_tonal_mask[-tracker.cfg.spect_cfg.crop_top: -tracker.cfg.spect_cfg.crop_bottom+1]
         
@@ -89,11 +91,11 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             pred_binary_block = (pred_tonal_block > 0).astype(int)
             block_peaks = [(peak[0], peak[1]- col) for peak in peaks  if peak[1] >= col and peak[1] < col + tracker.block_size]
             
-            utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}')
-            utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}')
-            utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
-            utils.plot_mask_over_spect(raw_block, pred_tonal_block, filename=f'{col}_2.pred_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True)
-            utils.plot_binary_mask(pred_binary_block, filename=f'{col}_7.pred_mask', save_dir=f'{output_dir}/{stem}')
+            utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}', axis=axis)
+            utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}', axis=axis)
+            utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)
+            utils.plot_mask_over_spect(raw_block, pred_tonal_block, filename=f'{col}_2.pred_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)
+            utils.plot_binary_mask(pred_binary_block, filename=f'{col}_7.pred_mask', save_dir=f'{output_dir}/{stem}', axis=axis)
 
             # if len(block_peaks) > 0:
             #     utils.plot_points_over_spect(raw_block, [block_peaks], filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')
@@ -103,7 +105,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
     return res
 
 
-def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, output_dir='outputs', min_thre=0.01, max_thre=0.99, thre_num=10):
+def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, output_dir='outputs', min_thre=0.01, max_thre=0.99, thre_num=10, visualize=False, axis=False):
     print(f"{'#'*30} Evaluating {model_name} model {'#'*30}")
     if stems is None:
         stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
@@ -142,7 +144,11 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         trackers[stem]= tracker
         print(f'{'#'*30} Finished Inference {'#'*30}')
 
-    log_path = os.path.join(cfg.log_dir, 'metrics_results.txt')
+    timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    eval_dir = os.path.join(cfg.log_dir, f'eval/{timestamp}')
+    if not os.path.exists(eval_dir):
+        os.makedirs(eval_dir)
+    log_path = os.path.join(eval_dir, 'metrics_results.txt')
     if os.path.exists(log_path):
         os.remove(log_path)
 
@@ -152,7 +158,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag"]
         res_all = TonalResults()
         for stem, tracker in trackers.items():
-            res = extract_tonals(tracker, thre, visualize=cfg.visualize, output_dir=output_dir+f'/{thre}', stem=stem)
+            res = extract_tonals(tracker, thre, visualize=visualize, output_dir=output_dir+f'/{thre}', stem=stem, axis=axis)
             res_all.merge(res)
             metrics = res_to_metric(res)
             precision = metrics.precision_valid
@@ -174,9 +180,9 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
 
     for stem, pr in prs.items():
         eval_res = utils.eval_tonal_map(pr, model_name)
-        with open(os.path.join(cfg.log_dir, f'{model_name}_results_tonal_{stem}.pkl'), 'wb') as f:
+        with open(os.path.join(eval_dir, f'{model_name}_results_tonal_{stem}.pkl'), 'wb') as f:
             pickle.dump(eval_res, f)
-        utils.plot_pr_curve([eval_res], cfg.log_dir, f'pr_curve_tonal_{stem}.png')
+        utils.plot_pr_curve([eval_res], eval_dir, f'pr_curve_tonal_{stem}.png')
 
 
 if __name__ == "__main__":
@@ -188,6 +194,8 @@ if __name__ == "__main__":
     parser.add_argument('--max_thre', type=float, default=0.99, help='Maximum threshold for filtering')
     parser.add_argument('--thre_num', type=int, default=20, help='Number of thresholds')
     parser.add_argument('--output_dir', type=str, default='outputs', help='Output directory')
+    parser.add_argument('--visualize', action='store_true', help='Visualize the results')
+    parser.add_argument('--axis', action='store_true', help='Show axis')
     args, remainings = parser.parse_known_args()
     cfg = tyro.cli(TonalConfig, args=remainings)
     
@@ -196,7 +204,8 @@ if __name__ == "__main__":
             stem = None
         else:
             stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
-        eval_graph_search(cfg, model_name = args.model, stems=stem, min_thre=args.min_thre, max_thre=args.max_thre, thre_num=args.thre_num, output_dir=args.output_dir)
+            stem = "QX-Dc-FLIP0610-VLA-061015-165000"
+        eval_graph_search(cfg, model_name = args.model, stems=stem, min_thre=args.min_thre, max_thre=args.max_thre, thre_num=args.thre_num, output_dir=args.output_dir, visualize=args.visualize, axis=args.axis)
     else:
         eval_results = [
             'logs/01-21-2025_19-51-29-sam/sam_results_tonal_all.pkl',

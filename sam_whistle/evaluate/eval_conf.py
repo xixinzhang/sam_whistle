@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass, asdict
 from tqdm import tqdm
 import json
+from datetime import datetime
+
 
 
 from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
@@ -220,10 +222,14 @@ def evaluate_conf_map(cfg: Union[SAMConfig, DWConfig], eval_fn, model_name = 'SA
     print(f"Test Loss: {test_loss:.3f}")
     print(f"Precision: {eval_res.precision:.3f}, Recall: {eval_res.recall:.3f}, F1: {eval_res.f1:.3f}, Threshold: {eval_res.threshold:.3f}")
     
-    with open(os.path.join(cfg.log_dir, f'{model_name}_results_pix{'-'+audio if audio is not None else ''}.pkl'), 'wb') as f:
+    timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    eval_dir = os.path.join(cfg.log_dir, f'eval/{timestamp}')
+    if not os.path.exists(eval_dir):
+        os.makedirs(eval_dir)
+    with open(os.path.join(eval_dir, f'{model_name}_results_pix{'-'+ audio if audio is not None else ''}.pkl'), 'wb') as f:
         pickle.dump(eval_res, f)
     
-    utils.plot_pr_curve([eval_res], cfg.log_dir, figname=f'{pr_name}_pix{'-'+ audio if audio is not None else ''}.png')
+    utils.plot_pr_curve([eval_res], eval_dir, figname=f'{pr_name}_pix{'-'+ audio if audio is not None else ''}.png')
 
 
 

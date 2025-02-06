@@ -188,8 +188,6 @@ class TonalConfig:
     # model
     log_dir: Optional[str]= 'logs'
     
-    visualize: bool = False
-
 if __name__ == '__main__':
     args = tyro.cli(SAMConfig)
     print(args)

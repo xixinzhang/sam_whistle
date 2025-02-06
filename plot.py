@@ -74,10 +74,10 @@ def plot_seg_grid():
     img = dataset[sample_idx]['img'][0]
     img = (img - img.min()) / (img.max() - img.min())
     y_ticks_num = 5
-    y_ticks = np.linspace(0, img.shape[0] - 1, num=y_ticks_num, endpoint=True, dtype=int)
+    y_ticks = np.linspace(0, img.shape[0], num=y_ticks_num, endpoint=True, dtype=int)
     y_labels = y_ticks[::-1]
-    x_tick_num = 10    
-    x_ticks = np.linspace(0, img.shape[1] - 1, num=x_tick_num, endpoint=True, dtype=int)
+    x_tick_num = 6  
+    x_ticks = np.linspace(0, img.shape[1], num=x_tick_num, endpoint=True, dtype=int)
     x_labels = x_ticks
     utils.visualize_array(img, filename, save_dir, cmap= cmap, left_margin_px=60, right_margin_px= 40, top_margin_px=10, bottom_margin_px=40, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], tick_size=16, label_size=20,  dpi=dpi)
 
@@ -88,5 +88,5 @@ def plot_nn():
     dataset = WhistleDataset(cfg, 'test', spect_nchan=1)
 
 if __name__ == '__main__':
-    plot_patch_grid()
+    # plot_patch_grid()
     plot_seg_grid()
