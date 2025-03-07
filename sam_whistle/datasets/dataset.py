@@ -1,31 +1,34 @@
-from collections import defaultdict
-import shutil
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import default_collate
-from PIL import Image
-import numpy as np
-from pathlib import Path
-import tyro
-import matplotlib.pyplot as plt
 import json
-from tqdm import tqdm
 import pickle
 import random
-from sam_whistle import utils, config
+import shutil
+from collections import defaultdict
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import tyro
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset, default_collate
+from tqdm import tqdm
+
+from sam_whistle import config, utils
 from sam_whistle.config import DWConfig, SAMConfig
 
 
 def custom_collate_fn(batch):
     specs = [item['img'] for item in batch]
     masks = [item['mask'] for item in batch]
-    infos = [item['info'] for item in batch]
-
-    return {
+    collated_data = {
         'img': default_collate(specs),
-        'mask': default_collate(masks),
-        'info': infos
+        'mask': default_collate(masks)
     }
+
+    if 'info' in batch[0]:
+        collated_data['info'] = [item['info'] for item in batch]
+
+    return collated_data
 
 
 class RandomBrightnessContrast:

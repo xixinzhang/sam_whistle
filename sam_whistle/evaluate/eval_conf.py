@@ -1,26 +1,29 @@
-import pickle
-from typing import Union
-import torch
-from torch import nn
+import json
 import os
-from torch.utils.data import DataLoader
+import pickle
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Union
+
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
 import tyro
 from sklearn.metrics import precision_recall_curve
-import matplotlib.pyplot as plt
-from dataclasses import dataclass, asdict
+from torch import nn
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-import json
-from datetime import datetime
 
-
-
-from sam_whistle.model import SAM_whistle, Detection_ResNet_BN2, FCN_Spect, FCN_encoder
-from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
-from sam_whistle.datasets.dataset import WhistleDataset, WhistlePatch, custom_collate_fn
-from sam_whistle.config import SAMConfig, DWConfig, FCNSpectConfig, FCNEncoderConfig
 from sam_whistle import utils
+from sam_whistle.config import (DWConfig, FCNEncoderConfig, FCNSpectConfig,
+                                SAMConfig)
+from sam_whistle.datasets.dataset import (WhistleDataset, WhistlePatch,
+                                          custom_collate_fn)
+from sam_whistle.model import (Detection_ResNet_BN2, FCN_encoder, FCN_Spect,
+                               SAM_whistle)
+from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
 from sam_whistle.utils.visualize import visualize
+
 
 @torch.no_grad()
 def evaluate_sam_prediction(cfg: SAMConfig, load=False, model: SAM_whistle = None, testloader: DataLoader = None, loss_fn: nn.Module=None, visualize_eval=False, visualize_name='', audio = None):

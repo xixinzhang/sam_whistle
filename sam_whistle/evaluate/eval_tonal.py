@@ -1,18 +1,21 @@
-from collections import defaultdict
-import pickle
-import tyro
 import json
 import os
-import numpy as np
-from prettytable import PrettyTable
-from itertools import chain
-import cv2 
-from dataclasses import dataclass, asdict
+import pickle
+from collections import defaultdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from itertools import chain
+
+import cv2
+import numpy as np
+import tyro
+from prettytable import PrettyTable
 
 from sam_whistle.config import TonalConfig
-from sam_whistle.evaluate.tonal_extraction.tonal_tracker import TonalTracker, TonalResults
+from sam_whistle.evaluate.tonal_extraction.tonal_tracker import (TonalResults,
+                                                                 TonalTracker)
 from sam_whistle.utils import utils
+
 
 @dataclass
 class TonalStats:

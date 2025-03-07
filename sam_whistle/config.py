@@ -1,8 +1,10 @@
-from dataclasses import dataclass, asdict
-from typing import Optional, Literal
+from dataclasses import asdict, dataclass
+from typing import Literal, Optional
+
+import numpy as np
 import torch
 import tyro
-import numpy as np
+
 
 @dataclass
 class SpectConfig:
@@ -69,7 +71,7 @@ class SAMConfig:
 
     num_workers: int = 8
     batch_size: int = 2
-    epochs: int = 100
+    epochs: int = 36
     encoder_lr: float = 5e-6
     decoder_lr: float = 1e-4
     prompt_lr: float = 1e-5

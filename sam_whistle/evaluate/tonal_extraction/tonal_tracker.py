@@ -1,21 +1,138 @@
-from collections import deque
-from matplotlib import pyplot as plt
-import numpy as np
-from pathlib import Path
-from scipy.interpolate import interp1d
-import tyro
-import torch
 import os
-from tqdm import tqdm
+from collections import deque
 from dataclasses import dataclass, field
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
-from sam_whistle.evaluate.tonal_extraction import tfTreeSet, ActiveSet
-from sam_whistle.model import *
-from sam_whistle.config import *
-from sam_whistle import utils
 from functools import partial
+from pathlib import Path
+from typing import Literal, Optional, Union
+
+import numpy as np
+import torch
+import torchaudio
+import torchaudio.functional as F
+import tyro
+from scipy.interpolate import interp1d
+
+from sam_whistle import utils
+from sam_whistle.config import *
+from sam_whistle.evaluate.tonal_extraction import ActiveSet, tfTreeSet
+from sam_whistle.model import *
+
+
+def exact_div(x, y):
+    assert x % y == 0
+    return x // y
+
+WINDOW_MS = 8
+HOP_MS = 2
+SAMPLE_RATE = 192_000
+N_FFT = exact_div(SAMPLE_RATE * WINDOW_MS,  1000)  
+HOP_LENGTH = exact_div(SAMPLE_RATE * HOP_MS, 1000)
+
+CHUNK_LENGTH = 3 # second cover whistle length
+N_SAMPLES = int(SAMPLE_RATE * CHUNK_LENGTH)
+N_FRAMES = exact_div(N_SAMPLES,  HOP_LENGTH) # 1500
+
+FRAME_PER_SECOND = exact_div(SAMPLE_RATE, HOP_LENGTH)
+NUM_FREQ_BINS = exact_div(N_FFT, 2) + 1
+FREQ_BIN_RESOLUTION = SAMPLE_RATE / N_FFT # 125 Hz
+
+TOP_DB = 80
+AMIN = 1e-10
+
+
+def load_audio(file:Union[str, Path]) -> torch.Tensor:
+    """Load audio wave file to tensor
+    
+    Args:
+        file: audio file path
+    Return:
+        waveform: (1, L)
+    """
+    try:
+        waveform, sample_rate = torchaudio.load(file)
+    except RuntimeError as e:
+        import librosa
+        waveform, sample_rate = librosa.load(file, sr=None)
+        waveform = torch.tensor(waveform).unsqueeze(0)
+    waveform =waveform/ torch.max(torch.abs(waveform)) # normalize to [-1, 1]
+    return waveform, sample_rate  # (1, L)
+
+
+def spectrogram(waveform: torch.Tensor, device: Optional[Union[str, torch.device]] = None):
+    """Compute spectrogram from waveform
+    
+    Args:
+        waveform: (1, L)
+        device: device to run the computation
+
+    Return:
+        spectrogram: (F, T) in range [-TOP_DB, 0]
+    """
+
+    window = torch.hann_window(N_FFT).to(device=device)
+    spec = F.spectrogram(
+        waveform,
+        pad=0,
+        window=window,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
+        win_length=N_FFT,
+        power=2,
+        normalized=False,
+        center=True,
+        pad_mode="reflect",
+        onesided=True,
+    )
+    # spec = F.amplitude_to_DB(spec, multiplier=10, amin=AMIN, db_multiplier = 1, top_db = TOP_DB)
+    # bound spect to [-TOP_DB, 0]
+    spec = F.amplitude_to_DB(spec, multiplier=10, amin=AMIN, db_multiplier = torch.max(spec).log10(), top_db = TOP_DB)
+    spec = spec[..., :-1].squeeze(0) # drop last frame
+    spec = torch.flipud(spec) # flip frequency axis
+    return spec # (F, T)  [-TOP_DB, 0]
+
+def normalize_spec_img(spec: torch.Tensor) -> torch.Tensor:
+    """Normalize spectrogram to [0, 1] to be compatible with image format"""
+    spec = (spec + TOP_DB) / TOP_DB
+    return spec
+
+
+@dataclass
+class SpectConfig:
+    crop: bool = True
+    min_freq: int = 5000
+    max_freq: int = 50000
+    hop_ms: int = HOP_MS
+    n_fft: int = N_FFT
+    frame_ms: int = WINDOW_MS
+    freq_bin: int = FREQ_BIN_RESOLUTION
+    top_db: int = TOP_DB
+    amin: float = AMIN
+    center: bool = True
+    split_ms: int = 3000
+    block_size: int = 1500
+    crop_bottom: int = int(min_freq // freq_bin)
+    crop_top: int = int(max_freq // freq_bin)
+
+class Config:
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    spect_cfg: SpectConfig = SpectConfig()
+    start_s: int = 0
+    end_s: float = np.inf
+    click_thr_db: float = 10
+    thre_norm: float = 0.5
+    use_conf: bool = True
+    order: int = 1
+    select_method:Literal["simple", "simpleN"] = 'simple'
+    minlen_ms: int = 150 # Whistles whose duration is shorter than threshold will be discarded.
+    maxgap_ms: int = 50 # Maximum gap in energy to bridge when looking for a tonal
+    maxslope_Hz_per_ms: int = 1000 # Maximum difference in frequency to bridge when looking for a tonal
+    activeset_s: float = 0.05 # peaks with earliest time > activeset_s will be part of active_set otherwise part of orphan set
+    peak_dis_thr: int = 2
+    disambiguate_s: float = 0.3
+    broadband:float = 0.01
+    log_dir: str = 'logs/03-06-2025_15-49-03-sam_coco'
+
 
 @dataclass
 class TonalResults:
@@ -87,7 +204,7 @@ class TonalTracker:
             self.thre = self.cfg.thre
             self._select_peaks = partial(self._select_peaks, method = self.cfg.select_method)
         # compare tonals
-        self.search_row = self.cfg.peak_tolerance_Hz // self.freq_bin
+        # self.search_row = self.cfg.peak_tolerance_Hz // self.freq_bin
 
         # model
         if self.cfg.use_conf:
@@ -105,8 +222,10 @@ class TonalTracker:
             
     def _load_spectrogram(self, stem: str):
         """Load original spectrogram from wave file, used for graph search baseline with"""
+        
+        # Modified to load spectrogram segments as images [0, 1]
         audio_file = self.audio_dir / f'{stem}.wav'
-        waveform, sample_rate = utils.load_wave_file(audio_file) # [L] 
+        waveform, sample_rate = load_audio(audio_file) # [1, L] 
         wave_len_s = waveform.shape[-1] / sample_rate
 
         start_s = max(0, self.cfg.start_s)
@@ -116,25 +235,30 @@ class TonalTracker:
         waveform = waveform[..., start_idx:end_idx]
         
         # to match the marie's implementation, set the center to False
-        spect_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.cfg.spect_cfg))# (freq, time)
+        spect_power_db= spectrogram(waveform)# (freq, time) [-TOP_DB, 0]
+        spect_power_db = normalize_spec_img(spect_power_db) # [0, 1]
+        print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
         
         self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
-            spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
+            spect_power_db = spect_power_db[-self.cfg.spect_cfg.crop_top: -self.cfg.spect_cfg.crop_bottom+1]
         
-        self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
+        print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
+        # spect_raw and spect_snr are useless in this case
+        # self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
         self.H, self.W = spect_power_db.shape[-2:]
         spect_snr = np.zeros_like(spect_power_db)
-        block_size = self.block_size
-        for i in range(0, self.W, block_size):
-            spect_snr[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, self.H * self.cfg.broadband)
+        # block_size = self.block_size
+        # for i in range(0, self.W, block_size):
+        #     spect_snr[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, self.H * self.cfg.broadband)
         print(f'Loaded spectrogram from {stem}: {spect_power_db.shape} shape: {spect_power_db.shape}, min: {spect_power_db.min():.2f}, max: {spect_power_db.max():2f}')
         
         self.start_cols = self._get_blocks()
        
         if self.cfg.use_conf:
-            spect_power_db = np.flip(spect_power_db, axis=0)
-            spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize,  min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max)
+            # spect_power_db = np.flip(spect_power_db, axis=0)
+            # spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize,  min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max)
+            print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
             return spect_power_db, spect_snr
         else:
             return spect_snr, spect_snr
