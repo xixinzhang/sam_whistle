@@ -11,6 +11,7 @@ import torchaudio
 import torchaudio.functional as F
 import tyro
 from scipy.interpolate import interp1d
+from torch.nn.functional import pad
 
 from sam_whistle import utils
 from sam_whistle.config import *
@@ -195,7 +196,7 @@ class TonalTracker:
         self.current_peaks_freq = []
         self.active_set = ActiveSet()
         self.active_set.setResolutionHz(self.freq_bin)
-        self.detected_tonals = None
+        self.dt_tonals = None
 
         if self.cfg.use_conf:
             self.thre = self.cfg.thre_norm
@@ -218,7 +219,7 @@ class TonalTracker:
         self.current_peaks_freq = []
         self.active_set = ActiveSet()
         self.active_set.setResolutionHz(self.freq_bin)
-        self.detected_tonals = None
+        self.dt_tonals = None
             
     def _load_spectrogram(self, stem: str):
         """Load original spectrogram from wave file, used for graph search baseline with"""
@@ -237,13 +238,12 @@ class TonalTracker:
         # to match the marie's implementation, set the center to False
         spect_power_db= spectrogram(waveform)# (freq, time) [-TOP_DB, 0]
         spect_power_db = normalize_spec_img(spect_power_db) # [0, 1]
-        print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
         
         self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
-            spect_power_db = spect_power_db[-self.cfg.spect_cfg.crop_top: -self.cfg.spect_cfg.crop_bottom+1]
-        
-        print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
+            self.crop_top = self.origin_shape[0] - self.cfg.spect_cfg.crop_top
+            spect_power_db = spect_power_db[self.crop_top : -self.cfg.spect_cfg.crop_bottom+1]
+
         # spect_raw and spect_snr are useless in this case
         # self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
         self.H, self.W = spect_power_db.shape[-2:]
@@ -253,12 +253,11 @@ class TonalTracker:
         #     spect_snr[:, i: i+block_size] = utils.snr_spect(spect_power_db[:, i:i+block_size], self.cfg.click_thr_db, self.H * self.cfg.broadband)
         print(f'Loaded spectrogram from {stem}: {spect_power_db.shape} shape: {spect_power_db.shape}, min: {spect_power_db.min():.2f}, max: {spect_power_db.max():2f}')
         
-        self.start_cols = self._get_blocks()
+        self.start_cols, spect_power_db = self._get_blocks(spect_power_db)
        
         if self.cfg.use_conf:
             # spect_power_db = np.flip(spect_power_db, axis=0)
             # spect_power_db = utils.normalize_spect(spect_power_db, method= self.cfg.spect_cfg.normalize,  min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max)
-            print(spect_power_db.shape, spect_power_db.min(), spect_power_db.max())
             return spect_power_db, spect_snr
         else:
             return spect_snr, spect_snr
@@ -269,13 +268,12 @@ class TonalTracker:
         gt_tonals = utils.load_annotation(bin_file)
         return gt_tonals
     
-    def _get_blocks(self,):
+    def _get_blocks(self, spect_power_db):
         block_size = self.block_size
-        start_cols = list(range(0, self.W - block_size + 1, block_size))
-        if start_cols[-1] < self.W - block_size:
-            start_cols.append(self.W - block_size)
-        
-        return start_cols
+        start_cols = list(range(0, self.W, block_size))
+        if self.W - start_cols[-1] < block_size:
+            spect_power_db = pad(spect_power_db,  (0, block_size - (self.W - start_cols[-1])))
+        return start_cols, spect_power_db
     
     @torch.no_grad()
     def sam_inference(self,):
@@ -534,21 +532,21 @@ class TonalTracker:
                 else:
                     self.discarded_count += 1
 
-        self.detected_tonals = tonals
+        self.dt_tonals = tonals
         print(f'Extract {len(tonals)} tonals discard {self.discarded_count} tonals from {self.stem}')
 
         return tonals
 
     def compare_tonals(self)-> TonalResults:
         """Compare extracted tonals with ground truth tonals."""
-        assert self.detected_tonals is not None, "No detected tonals to compare."
+        assert self.dt_tonals is not None, "No detected tonals to compare."
         # GT tonals
         gt_tonals = self.gt_tonals
         gt_num = len(gt_tonals)
         gt_ranges = np.zeros((gt_num, 2))
         gt_durations = np.zeros(gt_num)
         # Detected tonals
-        dt_tonals = self.detected_tonals
+        dt_tonals = self.dt_tonals
         dt_num = len(dt_tonals)
         dt_ranges = np.zeros((dt_num, 2))
         dt_durations = np.zeros(dt_num)

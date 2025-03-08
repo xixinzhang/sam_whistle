@@ -1,4 +1,5 @@
 import os.path
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -36,6 +37,14 @@ class WhistleCOCO(VisionDataset):
 
         self.coco = COCO(annFile)
         self.ids = list(sorted(self.coco.imgs.keys()))
+        self.audio_to_image = self._get_audio_to_image()
+
+    def _get_audio_to_image(self) -> dict:
+        audio_to_image = defaultdict(list)
+        for img_id, img_info in self.coco.imgs.items():
+            audio_filename = img_info['audio_filename']
+            audio_to_image[audio_filename].append(img_id)
+        return audio_to_image
 
     def _load_image(self, id: int) -> np.ndarray:
         path = self.coco.loadImgs(id)[0]["file_name"]
@@ -65,7 +74,9 @@ class WhistleCOCO(VisionDataset):
         gt_mask = bitmap_mask # (1, H, W)
         info = dict(
             image_id=id,
-            category_id = 1
+            category_id = 1,
+            audio_filename = self.coco.imgs[id]['audio_filename'],
+            start_frame = self.coco.imgs[id]['start_frame'],
         )
 
         data =  {
@@ -75,7 +86,6 @@ class WhistleCOCO(VisionDataset):
         }
 
         return data
-
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -95,5 +105,5 @@ if __name__ == "__main__":
     train_set = WhistleCOCO(root='data/dclde/spec_coco/train/data', annFile='data/dclde/spec_coco/train/labels.json')
     print(len(train_set))
     iter_train = iter(train_set)
-    image, target = next(iter_train)
-    # print(target)
+    data = next(iter_train)
+    print(data)
