@@ -40,6 +40,7 @@ class WhistleCOCO(VisionDataset):
         self.audio_to_image = self._get_audio_to_image()
 
     def _get_audio_to_image(self) -> dict:
+        """Map audio filenames to image ids in dataset."""
         audio_to_image = defaultdict(list)
         for img_id, img_info in self.coco.imgs.items():
             audio_filename = img_info['audio_filename']

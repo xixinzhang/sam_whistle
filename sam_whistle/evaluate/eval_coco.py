@@ -133,7 +133,7 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
-def get_detections(cfg, model_name='sam'):
+def get_detections(cfg, model_name='sam', debug=False):
     whistle_coco_data = os.path.join(cfg.root_dir, 'spec_coco/val/data')
     whistle_coco_label = os.path.join(cfg.root_dir, 'spec_coco/val/labels.json')
 
@@ -142,12 +142,14 @@ def get_detections(cfg, model_name='sam'):
 
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] + stems['train']
-    # stems = stems[1:2]
+    if debug:
+        stems = stems[1:2]
     trackers = {}
 
     bbox_dts = []
     mask_dts = []
 
+    gt_image_ids = []
     # First, collect all the detection results
     for stem in stems:
         tracker = TonalTracker(cfg, stem)
@@ -165,10 +167,12 @@ def get_detections(cfg, model_name='sam'):
         dt_tonals = tracker.dt_tonals
         print(len(dt_tonals))
         dt_tonals = [get_dense_annotation(traj) for traj in dt_tonals]
-        gt_tonals = tracker.gt_tonals
-        gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
+        if debug:
+            gt_tonals = tracker.gt_tonals
+            gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
 
         stem_img_ids = test_set.audio_to_image[stem]
+        gt_image_ids.extend(stem_img_ids)
 
         for img_id in stem_img_ids:
             data_index = test_set.ids.index(img_id)
@@ -177,10 +181,13 @@ def get_detections(cfg, model_name='sam'):
             # img = test_set[data_index]['img']
             spec_map = tracker.spect_map[::-1, start_frame:start_frame + N_FRAMES]  # lower frequency at the bottom
             dt_trajs = get_segment_annotation(dt_tonals, start_frame)
-            gt_trajs = get_segment_annotation(gt_tonals, start_frame)
+            
 
+            if debug:
+                gt_trajs = get_segment_annotation(gt_tonals, start_frame)
+                dt_trajs = gt_trajs
+                
             for dt_traj in dt_trajs:
-            # for dt_traj in gt_trajs:
                 traj_pix = tf_to_pix(dt_traj)
                 traj_plg = polyline_to_polygon(traj_pix)
                 if not traj_plg:
@@ -206,16 +213,20 @@ def get_detections(cfg, model_name='sam'):
 
                 bbox_dts.append(dt_bbox_dict)
                 mask_dts.append(dt_mask_dict)
-    
+
     # Evaluate metrics
+    bbox_coco = gt_coco.loadRes(bbox_dts)
+    mask_coco = gt_coco.loadRes(mask_dts)
     for metric in ['bbox', 'segm']:
-        coco_dt = gt_coco.loadRes(bbox_dts) if metric == 'bbox' else gt_coco.loadRes(mask_dts)
-        coco_eval = COCOeval(gt_coco, coco_dt, metric)
-        coco_eval.params.imgIds = stem_img_ids
+        coco_eval = COCOeval(gt_coco, bbox_coco, metric) if metric == 'bbox' else COCOeval(gt_coco, mask_coco, metric)
+        # coco_eval.params.imgIds = stem_img_ids
+        coco_eval.params.imgIds = gt_image_ids  # use detected subsets
         coco_eval.params.maxDets = [100, 300, 1000]
         coco_eval.evaluate()
         coco_eval.accumulate()
         coco_eval.summarize()
+
+    return bbox_coco, mask_coco
 
 
 def get_traj_score(spec_map, traj, cut_top):
@@ -224,7 +235,8 @@ def get_traj_score(spec_map, traj, cut_top):
     spec_traj = spec_map[traj[:, 1], traj[:, 0]]
     score = spec_traj.mean()
     return score
-    
+
+
 
 if __name__ == "__main__":
     import tyro
@@ -232,7 +244,16 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     known_args, unknown_args = parser.parse_known_args()
 
     cfg = tyro.cli(Config, args=unknown_args)
-    get_detections(cfg, model_name=known_args.model_name)
+    bbox_dts, mask_dts = get_detections(cfg, model_name=known_args.model_name, debug=known_args.debug)
+
+
+
+
+    import pickle
+    with open(f'outputs/dt_result_{known_args.model_name}.pkl', 'wb') as f:
+        pickle.dump({'bbox': bbox_dts, 'mask': mask_dts}, f)
+    

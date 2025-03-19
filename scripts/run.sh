@@ -37,5 +37,5 @@ python sam_whistle/evaluate/eval_tonal.py --model graph_search --spect_cfg.norma
 python sam_whistle/main.py --model sam_coco --batch_size 2 --device cuda:0
 python sam_whistle/evaluate/eval_coco.py --log-dir logs/03-07-2025_21-22-39-sam_coco --model_name sam
 # sam2
-python sam_whistle/evaluate/eval_coco.py --log-dir logs/03-14-2025_17-58-44-sam2_coco --model_name sam2
 python sam_whistle/main.py --model sam2_coco --batch_size 2 --device cuda:0
+python sam_whistle/evaluate/eval_coco.py --log-dir logs/03-14-2025_17-58-44-sam2_coco --model_name sam2
