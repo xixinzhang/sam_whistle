@@ -12,7 +12,6 @@ from shapely.ops import clip_by_rect
 from sam_whistle.datasets.whistle_coco import WhistleCOCO
 from sam_whistle.evaluate.tonal_extraction.tonal_tracker import *
 
-cfg = Config()
 
 def get_dense_annotation(traj: np.ndarray, dense_factor: int = 10):
     """Get dense annotation from the trajectory to make it continuous and fill the gaps.
@@ -134,16 +133,16 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
-def get_detections(cfg):
-    # TODO: train + test
+def get_detections(cfg, model_name='sam'):
     whistle_coco_data = os.path.join(cfg.root_dir, 'spec_coco/val/data')
     whistle_coco_label = os.path.join(cfg.root_dir, 'spec_coco/val/labels.json')
 
     test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
     gt_coco = test_set.coco
 
-    stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
-    stems = stems[1:2]
+    stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
+    stems = stems['test'] + stems['train']
+    # stems = stems[1:2]
     trackers = {}
 
     bbox_dts = []
@@ -152,11 +151,19 @@ def get_detections(cfg):
     # First, collect all the detection results
     for stem in stems:
         tracker = TonalTracker(cfg, stem)
-        tracker.sam_inference()
+        if model_name == 'sam':
+            tracker.sam_inference()
+        elif model_name == 'sam2':
+            tracker.sam2_inference()
+        elif model_name == 'dw':
+            tracker.dw_inference()
+        else:
+            raise ValueError(f"Unknown model name: {model_name}")
         trackers[stem] = tracker
         tracker.build_graph()
         tracker.get_tonals()
         dt_tonals = tracker.dt_tonals
+        print(len(dt_tonals))
         dt_tonals = [get_dense_annotation(traj) for traj in dt_tonals]
         gt_tonals = tracker.gt_tonals
         gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
@@ -220,4 +227,12 @@ def get_traj_score(spec_map, traj, cut_top):
     
 
 if __name__ == "__main__":
-    get_detections(cfg)
+    import tyro
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
+    parser.add_argument("--model_name", type=str, default="sam")
+    known_args, unknown_args = parser.parse_known_args()
+
+    cfg = tyro.cli(Config, args=unknown_args)
+    get_detections(cfg, model_name=known_args.model_name)

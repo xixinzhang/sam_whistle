@@ -114,10 +114,11 @@ class SpectConfig:
     crop_bottom: int = int(min_freq // freq_bin)
     crop_top: int = int(max_freq // freq_bin)
 
+@dataclass
 class Config:
+    spect_cfg: SpectConfig
     root_dir: str = 'data/dclde'
     meta_file: str = 'meta.json'
-    spect_cfg: SpectConfig = SpectConfig()
     start_s: int = 0
     end_s: float = np.inf
     click_thr_db: float = 10
@@ -132,7 +133,7 @@ class Config:
     peak_dis_thr: int = 2
     disambiguate_s: float = 0.3
     broadband:float = 0.01
-    log_dir: str = 'logs/03-06-2025_15-49-03-sam_coco'
+    log_dir: str = 'logs/03-07-2025_21-22-39-sam_coco'
 
 
 @dataclass
@@ -274,7 +275,43 @@ class TonalTracker:
         if self.W - start_cols[-1] < block_size:
             spect_power_db = pad(spect_power_db,  (0, block_size - (self.W - start_cols[-1])))
         return start_cols, spect_power_db
-    
+
+
+    @torch.no_grad()
+    def sam2_inference(self,):
+        assert self.cfg.use_conf, "Not using confidence model"
+        cfg = SAM2Config(SpectConfig)
+        model = SAM2_whistle(cfg)
+        model.to(cfg.device)
+        # Load model weights
+        if not cfg.freeze_img_encoder:
+            model.img_encoder.load_state_dict(torch.load(os.path.join(self.log_dir, 'img_encoder.pth'), weights_only=True))
+        if not cfg.freeze_mask_decoder:
+            model.decoder.load_state_dict(torch.load(os.path.join(self.log_dir, 'decoder.pth'), weights_only=True))
+        if not cfg.freeze_prompt_encoder:
+            model.model.prompt_encoder.load_state_dict(torch.load(os.path.join(self.log_dir, 'prompt_encoder.pth'), weights_only=True))
+
+        # Inference
+        model.eval()
+        spect_map =self.spect_map
+        pred_mask = np.zeros_like(spect_map)
+        weights = np.zeros_like(spect_map)
+
+        block_size = cfg.spect_cfg.block_size
+        start_cols = self.start_cols
+
+        for start in start_cols:
+            end = start + block_size
+            block = spect_map[..., start:end]  # (H, W)
+            block = torch.tensor(np.stack([block, block, block], axis=0)).to(cfg.device).unsqueeze(0) # (1, 3, H, W)
+            pred = model(block).cpu().numpy().squeeze()
+            pred_mask[::-1, start:end] += pred
+            weights[:, start:end] += 1
+        
+        pred_mask /= weights
+        self.spect_map = pred_mask
+
+
     @torch.no_grad()
     def sam_inference(self,):
         assert self.cfg.use_conf, "Not using confidence model"

@@ -14,15 +14,108 @@ from torchinfo import summary
 from tqdm import tqdm
 
 from sam_whistle.config import (DWConfig, FCNEncoderConfig, FCNSpectConfig,
-                                SAMConfig)
+                                SAMConfig, SAM2Config)
 from sam_whistle.datasets import (WhistleCOCO, WhistleDataset, WhistlePatch,
                                   custom_collate_fn)
 from sam_whistle.evaluate.eval_conf import *
 from sam_whistle.model import (Detection_ResNet_BN2, FCN_encoder, FCN_Spect,
-                               SAM_whistle)
+                               SAM2_whistle, SAM_whistle)
 from sam_whistle.model.fcn_patch import weights_init_He_normal
 from sam_whistle.model.loss import Charbonnier_loss, DiceLoss
 from sam_whistle.utils.visualize import visualize_array
+
+
+def run_sam2_coco(cfg: SAM2Config):
+    timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    if cfg.exp_name is not None:
+        cfg.exp_name = "sam2_coco"
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp)+"-"+cfg.exp_name)
+    else:
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp))
+    if not os.path.exists(cfg.log_dir):
+        os.makedirs(cfg.log_dir)
+    with open(os.path.join(cfg.log_dir, 'configs.json'), 'w') as f:
+        json.dump(asdict(cfg), f, indent=4)
+    writer = SummaryWriter(cfg.log_dir)
+    # Load model
+    model = SAM2_whistle(cfg)
+
+    total_params = sum(p.numel() for p in model.img_encoder.parameters())
+    print(f"Total parameters: {total_params / 1e6:.2f}M")
+
+    model.to(cfg.device)
+    # optimizer
+    if cfg.loss_fn == "mse":
+        loss_fn = nn.MSELoss()
+    elif cfg.loss_fn == "dice":
+        loss_fn = DiceLoss()
+    elif cfg.loss_fn == "bce_logits":
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+    if not cfg.freeze_img_encoder:
+        encoder_optimizer = optim.AdamW(model.img_encoder.parameters(), lr=cfg.encoder_lr)
+    if not cfg.freeze_mask_decoder:
+        decoder_optimizer = optim.AdamW(model.decoder.parameters(), lr=cfg.decoder_lr)
+    if not cfg.freeze_prompt_encoder:
+        prompt_optimizer = optim.AdamW(model.model.prompt_encoder.parameters(), lr=cfg.prompt_lr)
+
+    # Load data
+    print("#"*30 + " Loading data...."+"#"*30)
+    train_path = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'data')
+    train_ann = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'labels.json')
+    test_path = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'data')
+    test_ann = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'labels.json')
+    trainset = WhistleCOCO(root=train_path, annFile=train_ann)
+    trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
+    testset = WhistleCOCO(root=test_path, annFile=test_ann)
+    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
+    print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
+
+    min_test_loss = torch.inf
+    pbar = tqdm(range(cfg.epochs))
+    for epoch in pbar:
+        # Train model
+        batch_losses = []
+        model.train()
+        for i, data in enumerate(trainloader):
+            spect, gt_mask = data['img'], data['mask']
+            spect = spect.to(cfg.device)
+            gt_mask = gt_mask.to(cfg.device)
+
+            pred_mask = model(spect)
+            batch_loss = loss_fn(pred_mask, gt_mask)
+
+            encoder_optimizer.zero_grad()
+            decoder_optimizer.zero_grad()
+            batch_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.img_encoder.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.decoder.parameters(), max_norm=1.0)
+            encoder_optimizer.step()
+            decoder_optimizer.step()
+            batch_losses.append(batch_loss.item())
+            pbar.set_description(f"batch_loss: {batch_loss.item():.4f}")
+            writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
+
+        epoch_loss = np.mean(batch_losses)
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
+        writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
+        
+        # Test model and save Model
+        test_loss= evaluate_sam_prediction(cfg, False, model, testloader, loss_fn)
+        writer.add_scalar('Loss/test', test_loss, epoch)
+
+        if test_loss < min_test_loss:
+            print(f"Saving best model with test loss {test_loss} at epoch {epoch}")
+            min_test_loss = test_loss
+            if not cfg.freeze_img_encoder:
+                torch.save(model.img_encoder.state_dict(), os.path.join(cfg.log_dir, 'img_encoder.pth'))
+            if not cfg.freeze_mask_decoder:
+                torch.save(model.decoder.state_dict(), os.path.join(cfg.log_dir, 'decoder.pth'))
+            if not cfg.freeze_prompt_encoder:
+                torch.save(model.sam_model.prompt_encoder.state_dict(), os.path.join(cfg.log_dir, 'prompt_encoder.pth'))
+        writer.add_scalar('Loss/test_min', min_test_loss, epoch)
+
+
+
 
 
 def run_sam_coco(cfg: SAMConfig):
@@ -39,6 +132,8 @@ def run_sam_coco(cfg: SAMConfig):
     writer = SummaryWriter(cfg.log_dir)
     # Load model
     model = SAM_whistle(cfg)
+    total_params = sum(p.numel() for p in model.img_encoder.parameters())
+    print(f"Total parameters: {total_params / 1e6:.2f}M")
 
     model.to(cfg.device)
     # optimizer
@@ -452,5 +547,8 @@ if __name__ == "__main__":
     elif args.model == 'sam_coco':
         cfg = tyro.cli(SAMConfig, args=remaining)
         run_sam_coco(cfg)
+    elif args.model == 'sam2_coco':
+        cfg = tyro.cli(SAM2Config, args=remaining)
+        run_sam2_coco(cfg)
     else:
         raise ValueError("Model not recognized")

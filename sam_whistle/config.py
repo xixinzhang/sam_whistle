@@ -79,6 +79,38 @@ class SAMConfig:
 
 
 @dataclass
+class SAM2Config:
+    # data
+    spect_cfg: SpectConfig
+    root_dir: str = 'data/dclde'
+    meta_file: str = 'meta.json'
+    all_data: bool = False
+    save_pre: bool = False
+
+    debug: bool = False
+    exp_name: Optional[str] = "sam"
+    log_dir: str = 'logs'
+
+    device: str = 'cuda:0'
+    model_type: str = 'hiera_b'
+    ckpt_dir: str = 'sam2_checkpoints'
+    sam_cfg: str = 'configs/sam2.1'
+    sam_decoder: bool = False
+    freeze_img_encoder:bool = False
+    freeze_mask_decoder:bool = False
+    use_prompt:bool = False
+    freeze_prompt_encoder:bool = True
+
+    num_workers: int = 8
+    batch_size: int = 2
+    epochs: int = 36
+    encoder_lr: float = 5e-6
+    decoder_lr: float = 1e-4
+    prompt_lr: float = 1e-5
+    loss_fn: Literal["mse", "dice", "bce_logits"] = 'dice'
+
+
+@dataclass
 class DWConfig:
     # data
     spect_cfg: PatchConfig

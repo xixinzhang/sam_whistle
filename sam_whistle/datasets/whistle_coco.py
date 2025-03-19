@@ -80,8 +80,8 @@ class WhistleCOCO(VisionDataset):
         )
 
         data =  {
-            "img": spec, 
-            "mask": gt_mask,
+            "img": spec,  # (C, H, W) [0, 1]
+            "mask": gt_mask, # (1, H, W) (binary mask)
             'info': info
         }
 
