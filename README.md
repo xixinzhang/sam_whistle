@@ -8,17 +8,14 @@ pip install -e .
 git submodule add --force https://github.com/facebookresearch/segment-anything
 pip install -e ./segment-anything/
 ```
-`conda install ffmpeg`
-
+ffmpeg is required: `conda install ffmpeg`
 
 ## Training & Inference
 training
 ```shell
 python sam_whistle/main.py --model sam --batch_size 2 --device cuda:0 --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3
 ```
-inference
-```shell
-```
+
 ## evaluation
 1. pixel-level
 ```shell
