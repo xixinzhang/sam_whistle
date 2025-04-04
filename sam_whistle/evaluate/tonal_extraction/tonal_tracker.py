@@ -557,8 +557,9 @@ if __name__ == "__main__":
     for stem in ['Qx-Dd-SCI0608-N1-060814-150255']:
         cfg = tyro.cli(TonalConfig)
         tracker = TonalTracker(cfg, stem)
-        # tracker.sam_inference()
-        for thre in [9.5, 10]:
+        tracker.sam_inference()
+        # for thre in [9.5, 10]:
+        for thre in [0.5]:
             tracker.reset()
             tracker.thre = thre
             tracker.build_graph()
