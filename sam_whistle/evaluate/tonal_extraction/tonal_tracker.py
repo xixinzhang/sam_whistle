@@ -122,7 +122,7 @@ class Config:
     start_s: int = 0
     end_s: float = np.inf
     click_thr_db: float = 10
-    thre_norm: float = 0.5
+    thre_norm: float = 0.5  # threshold for peak detection
     use_conf: bool = True
     order: int = 1
     select_method:Literal["simple", "simpleN"] = 'simple'
