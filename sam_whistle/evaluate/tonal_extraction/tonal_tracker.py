@@ -19,6 +19,7 @@ from functools import partial
 
 @dataclass
 class TonalResults:
+    dt_num: int = 0
     dt_false_pos_all: int = 0
     dt_true_pos_all: int = 0
     dt_true_pos_valid: int = 0
@@ -34,6 +35,7 @@ class TonalResults:
     all_dura: list = field(default_factory=list)
 
     def merge(self, other):
+        self.dt_num += other.dt_num
         self.dt_false_pos_all += other.dt_false_pos_all
         self.dt_true_pos_all += other.dt_true_pos_all
         self.dt_true_pos_valid += other.dt_true_pos_valid
@@ -465,10 +467,11 @@ class TonalTracker:
             # check validation of gt_tonal using snr_spect
             gt_start_s, gt_end_s = gt_ranges[gt_idx]   
             gt_block_start = np.ceil((gt_start_s - self.start_s) /self.hop_s).astype(int) # ceil
-            gt_block_end = np.floor((gt_end_s - self.start_s) / self.hop_s).astype(int) + 1# floor
-            gt_block = self.spect_snr[:, gt_block_start: gt_block_end]
+            gt_block_end = np.floor((gt_end_s - self.start_s) / self.hop_s).astype(int) # floor
+            gt_block = self.spect_snr[:, gt_block_start: gt_block_end + 1]
             # serarch range
-            gt_block_ts = self.start_s + np.arange(gt_block_start, gt_block_end) * self.hop_s
+            gt_block_end = min(gt_block_end, self.W-1)
+            gt_block_ts = self.start_s + np.arange(gt_block_start, gt_block_end + 1) * self.hop_s
             gt_t, gt_f = gt_tonal[:, 0], gt_tonal[:, 1]
             gt_t_unique_idx = np.unique(gt_t, return_index=True)[1]
             gt_t = gt_t[gt_t_unique_idx]
@@ -476,11 +479,13 @@ class TonalTracker:
             gt_f_interp_fn = interp1d(gt_t, gt_f, fill_value="extrapolate")
             gt_f_interp = gt_f_interp_fn(gt_block_ts)
             # serach neighborhood
-            gt_row = np.rint(gt_f_interp / self.freq_bin).astype(int) - self.spect_cfg.crop_bottom # + 1
-            search_row_low = np.minimum(np.maximum(gt_row - self.search_row, 0), self.H)
-            search_row_high = np.maximum(np.minimum(gt_row + self.search_row, self.H), 0)
-            assert len(search_row_low) == len(search_row_high) == gt_block.shape[-1]
-            spect_search = [np.max(gt_block[l:h, i]).item() for i, (l,h)in enumerate(zip(search_row_low, search_row_high))] 
+            gt_row = np.rint(gt_f_interp / self.freq_bin).astype(int) - self.spect_cfg.crop_bottom
+            gt_row = np.clip(gt_row, 0, self.H - 1)
+            search_row_low = np.maximum(gt_row - self.search_row, 0)
+            search_row_high = np.minimum(gt_row + self.search_row, self.H-1)
+            assert len(search_row_low) == len(search_row_high) == gt_block.shape[-1], f"Search range not match with gt tonal {len(search_row_low)} {len(search_row_high)} {gt_block.shape[-1]}, {gt_block_ts.shape}, {len(gt_f_interp)} {gt_start_s}, {gt_end_s}, {gt_block_start}, {gt_block_end}, {self.spect_snr.shape[-1]}"
+            # assert (search_row_low<  search_row_high).all(), f"Search range not valid {search_row_low} {search_row_high}\n gt_f_interp max: {gt_f_interp.max()}, min: {gt_f_interp.min()}, gt_row max: {gt_row.max()}, min: {gt_row.min()}"
+            spect_search = [np.max(gt_block[l:h + 1, i]).item() for i, (l,h)in enumerate(zip(search_row_low, search_row_high))] 
             sorted_search_snr = np.sort(spect_search)
             # check validation
             bound_idx = max(0, round(len(sorted_search_snr) * (1- self.cfg.ratio_above_snr))-1)
@@ -531,6 +536,7 @@ class TonalTracker:
         self.gt_tonals_missed_valid = [gt_tonals[i] for i in gt_missed_valid]
 
         tonal_stats = TonalResults(
+            dt_num = dt_num,
             dt_false_pos_all = len(dt_false_pos_all),
             dt_true_pos_all = len(dt_true_pos_all),
             dt_true_pos_valid = len(dt_true_pos_valid),

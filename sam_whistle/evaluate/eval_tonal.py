@@ -27,15 +27,18 @@ class TonalStats:
     excess_mean: float
     excess_std: float
     frag: float
+    dt_num: int
     gt_num: int
+    gt_num_all: int
 
 
 def res_to_metric(res: TonalResults):
     precision_valid = res.dt_true_pos_valid / (res.dt_true_pos_valid + res.dt_false_pos_all + 1e-8)
     precision_all = res.dt_true_pos_all / (res.dt_true_pos_all + res.dt_false_pos_all + 1e-8)
     gt_num = res.gt_matched_valid + res.gt_missed_valid
+    gt_num_all = res.gt_matched_all + res.gt_missed_all
     recall_valid = res.gt_matched_valid / gt_num
-    recall_all = res.gt_matched_all / (res.gt_matched_all + res.gt_missed_all + 1e-8)
+    recall_all = res.gt_matched_all / gt_num_all
     dev_mean = np.mean(res.all_deviation)
     dev_std = np.std(res.all_deviation)
     coverage = np.array(res.all_covered_s) / np.array(res.all_dura)
@@ -58,7 +61,9 @@ def res_to_metric(res: TonalResults):
         excess_mean=excess_mean,
         excess_std=excess_std,
         frag=frag,
-        gt_num=gt_num
+        dt_num = res.dt_num,
+        gt_num=gt_num,
+        gt_num_all=gt_num_all
     )
     return stats
 
@@ -115,6 +120,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
     print(f"{'#'*30} Evaluating {model_name} model {'#'*30}")
     if stems is None:
         stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['test']
+        stems += json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['train']
     elif isinstance(stems, str):
         stems = [stems]
     else:
@@ -161,7 +167,9 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
     for thre in threshold_list:
         print(f"{'#'*30} Threshold: {thre} {'#'*30}")
         table = PrettyTable()
-        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag", "Precision_all", "Recall_all"]
+        table_all = PrettyTable()
+        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag",]
+        table_all.field_names = ["Stem", "GT_N(all)", "DT_N",  "Precision_all", "Recall_all"]
         res_all = TonalResults()
         for stem, tracker in trackers.items():
             res = extract_tonals(tracker, thre, visualize=visualize, output_dir=output_dir+f'/{thre}', stem=stem, axis=axis)
@@ -174,13 +182,16 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             prs[stem].append((precision, recall, thre))
             print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
             print(f'[{stem}] precision_all: {precision_all:.2f}, recall_all: {recall_all:.2f}, ov_all: {res.dt_true_pos_all}, gt_matched_all: {res.gt_matched_all}, gt_missed_all: {res.gt_missed_all}')
-            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.4f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}', f'{metrics.precision_all*100:.2f}', f'{metrics.recall_all*100:.2f}'] )
+            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.4f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'] )
+            table_all.add_row([stem, metrics.gt_num_all,  metrics.dt_num, f'{metrics.precision_all*100:.2f}', f'{metrics.recall_all*100:.2f}'])
         
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
-        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}', f'{metrics_all.precision_all*100:.2f}', f'{metrics_all.recall_all*100:.2f}'])
+        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}',])
+        table_all.add_row(['All', metrics_all.gt_num_all, metrics.dt_num, f'{metrics_all.precision_all*100:.2f}', f'{metrics_all.recall_all*100:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
+        print(table_all)
 
         with open(log_path, 'a') as f:
             f.write(f"\n{'#'*30} Threshold: {thre} {'#'*30}\n")
