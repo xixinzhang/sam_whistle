@@ -188,7 +188,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
         table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}',])
-        table_all.add_row(['All', metrics_all.gt_num_all, metrics.dt_num, f'{metrics_all.precision_all*100:.2f}', f'{metrics_all.recall_all*100:.2f}'])
+        table_all.add_row(['All', metrics_all.gt_num_all, metrics_all.dt_num, f'{metrics_all.precision_all*100:.2f}', f'{metrics_all.recall_all*100:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
         print(table_all)
