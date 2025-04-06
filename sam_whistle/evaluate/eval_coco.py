@@ -10,10 +10,9 @@ from rich import print as rprint
 
 import numpy as np
 import pycocotools.mask as maskUtils
-from matplotlib import pyplot as plt
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point
 from shapely.ops import clip_by_rect
 from skimage.morphology import skeletonize
 
@@ -153,8 +152,8 @@ def get_detections(cfg, model_name='sam', debug=False):
     stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
-        # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
-        stems = stems[:1]
+        stems = ['Qx-Dd-SCI0608-N1-060814-150255']
+        # stems = stems[:6]
     trackers = {}
 
     bbox_dts = []
@@ -267,7 +266,235 @@ def get_traj_score(spec_map, traj, cut_top):
     return score
 
 
-def mask_to_whistle(mask):
+def bresenham_line(p1, p2):
+    """
+    Implements Bresenham's line algorithm for grid-aligned paths.
+    This creates the most direct path between two points while staying on the grid.
+    
+    Args:
+        p1: Starting point (x1, y1)
+        p2: Ending point (x2, y2)
+        
+    Returns:
+        List of points [(x1,y1), ..., (x2,y2)] forming a continuous path
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    
+    # Initialize the path with the starting point
+    path = []
+    
+    dx = abs(x2 - x1)
+    dy = abs(y2 - y1)
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+    err = dx - dy
+    
+    while True:
+        path.append((x1, y1))
+        
+        if x1 == x2 and y1 == y2:
+            break
+            
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x1 += sx
+        if e2 < dx:
+            err += dx
+            y1 += sy
+    
+    return path
+
+
+def midpoint_interpolation(p1, p2):
+    """
+    Recursively creates a path by adding midpoints between points.
+    
+    Args:
+        p1: Starting point (x1, y1)
+        p2: Ending point (x2, y2)
+        
+    Returns:
+        List of points forming a continuous path
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    
+    # Base case: points are adjacent or the same
+    if abs(x2 - x1) <= 1 and abs(y2 - y1) <= 1:
+        return [p1, p2]
+    
+    # Find the midpoint (rounded to integers)
+    mid_x = (x1 + x2) // 2
+    mid_y = (y1 + y2) // 2
+    midpoint = (mid_x, mid_y)
+    
+    # Recursively find paths for each half
+    first_half = midpoint_interpolation(p1, midpoint)
+    second_half = midpoint_interpolation(midpoint, p2)
+    
+    # Combine the paths (avoid duplicating the midpoint)
+    return first_half[:-1] + second_half
+
+
+def simple_weighted_path(points, i, window=2):
+    """
+    A simpler weighted path method that doesn't use BFS.
+    Uses direct interpolation with local direction awareness.
+    
+    Args:
+        points: All trajectory points
+        i: Current index
+        window: Number of points to consider on each side
+        
+    Returns:
+        List of points forming a continuous path
+    """
+    # Ensure all points are tuples
+    points = [tuple(p) for p in points]
+    current = points[i]
+    next_point = points[i + 1]
+    
+    # If points are close, use Bresenham's algorithm
+    if abs(next_point[0] - current[0]) <= 3 and abs(next_point[1] - current[1]) <= 3:
+        return bresenham_line(current, next_point)
+    
+    # Get neighboring points within window
+    start_idx = max(0, i - window)
+    end_idx = min(len(points) - 1, i + 1 + window)
+    neighbors = points[start_idx:end_idx + 1]
+    
+    # Simple weighted path based on direction awareness
+    if len(neighbors) <= 2:
+        return bresenham_line(current, next_point)
+    
+    # Calculate primary direction from neighbors
+    x_coords = [p[0] for p in neighbors]
+    y_coords = [p[1] for p in neighbors]
+    
+    # Simple linear trend (direction)
+    if len(neighbors) >= 3:
+        x_diffs = [x_coords[j+1] - x_coords[j] for j in range(len(x_coords)-1)]
+        y_diffs = [y_coords[j+1] - y_coords[j] for j in range(len(y_coords)-1)]
+        avg_x_diff = sum(x_diffs) / len(x_diffs)
+        avg_y_diff = sum(y_diffs) / len(y_diffs)
+    else:
+        avg_x_diff = next_point[0] - current[0]
+        avg_y_diff = next_point[1] - current[1]
+    
+    # Create a path with awareness of the typical step size
+    path = [current]
+    
+    # Current position
+    cx, cy = current
+    tx, ty = next_point
+    
+    # Step sizes (make them integers between 1-3 based on average direction)
+    step_x = max(1, min(3, int(abs(avg_x_diff)) or 1)) * (1 if tx > cx else -1 if tx < cx else 0)
+    step_y = max(1, min(3, int(abs(avg_y_diff)) or 1)) * (1 if ty > cy else -1 if ty < cy else 0)
+    
+    # We'll adjust step_x and step_y to ensure we don't overshoot
+    while (cx, cy) != next_point:
+        # Decide which direction to move
+        if abs(cx - tx) > abs(cy - ty):
+            # Move in x direction
+            new_cx = cx + step_x
+            # Check if we'd overshoot
+            if (step_x > 0 and new_cx > tx) or (step_x < 0 and new_cx < tx):
+                new_cx = tx
+            cx = new_cx
+        else:
+            # Move in y direction
+            new_cy = cy + step_y
+            # Check if we'd overshoot
+            if (step_y > 0 and new_cy > ty) or (step_y < 0 and new_cy < ty):
+                new_cy = ty
+            cy = new_cy
+        
+        # Add new point to path
+        new_point = (cx, cy)
+        
+        # Check if we need to fill gaps (ensure path is grid-continuous)
+        last_point = path[-1]
+        if abs(new_point[0] - last_point[0]) > 1 or abs(new_point[1] - last_point[1]) > 1:
+            # Fill gap with Bresenham
+            gap_filler = bresenham_line(last_point, new_point)
+            path.extend(gap_filler[1:])
+        else:
+            path.append(new_point)
+    
+    return path
+
+def bezier_grid_path(points, start_idx, end_idx, steps=10):
+    """
+    Creates a Bezier curve between points and snaps it to grid.
+    
+    Args:
+        points: All trajectory points
+        start_idx: Index of starting point
+        end_idx: Index of ending point
+        steps: Number of interpolation steps
+        
+    Returns:
+        List of grid points approximating a Bezier curve
+    """
+    # Extract points
+    p0 = points[start_idx]
+    p3 = points[end_idx]
+    
+    # Use neighboring points to determine control points if available
+    if start_idx > 0 and end_idx < len(points) - 1:
+        # Control points based on neighboring points
+        prev = points[start_idx - 1]
+        next_point = points[end_idx + 1]
+        
+        # Create control points by extending the lines from neighbors
+        dx1 = p0[0] - prev[0]
+        dy1 = p0[1] - prev[1]
+        p1 = (p0[0] + dx1 // 2, p0[1] + dy1 // 2)
+        
+        dx2 = p3[0] - next_point[0]
+        dy2 = p3[1] - next_point[1]
+        p2 = (p3[0] + dx2 // 2, p3[1] + dy2 // 2)
+    else:
+        # Default control points for endpoints
+        dx = p3[0] - p0[0]
+        dy = p3[1] - p0[1]
+        p1 = (p0[0] + dx // 3, p0[1] + dy // 3)
+        p2 = (p0[0] + 2 * dx // 3, p0[1] + 2 * dy // 3)
+    
+    # Generate Bezier curve points
+    curve_points = []
+    for t in np.linspace(0, 1, steps):
+        # Cubic Bezier formula
+        x = (1-t)**3 * p0[0] + 3*(1-t)**2*t * p1[0] + 3*(1-t)*t**2 * p2[0] + t**3 * p3[0]
+        y = (1-t)**3 * p0[1] + 3*(1-t)**2*t * p1[1] + 3*(1-t)*t**2 * p2[1] + t**3 * p3[1]
+        
+        # Round to nearest grid point
+        curve_points.append((round(x), round(y)))
+    
+    # Ensure the path is continuous by filling any gaps
+    grid_path = [p0]
+    for i in range(1, len(curve_points)):
+        prev = grid_path[-1]
+        current = curve_points[i]
+        
+        # If points aren't adjacent, fill the gap with Bresenham
+        if abs(current[0] - prev[0]) > 1 or abs(current[1] - prev[1]) > 1:
+            connecting_points = bresenham_line(prev, current)
+            grid_path.extend(connecting_points[1:])
+        else:
+            grid_path.append(current)
+    
+    # Ensure end point is included
+    if grid_path[-1] != p3:
+        connecting_points = bresenham_line(grid_path[-1], p3)
+        grid_path.extend(connecting_points[1:])
+    
+    return grid_path
+
+def mask_to_whistle(mask, method='bresenham'):
     """convert the instance mask to whistle contour, use skeleton methods
     
     Args
@@ -279,33 +506,49 @@ def mask_to_whistle(mask):
     skeleton = skeletonize(mask).astype(np.uint8)
     whistle = np.array(np.nonzero(skeleton)).T # [(y, x]
     whistle = np.flip(whistle, axis=1)  # [(x, y)]
+    whistle = whistle[whistle[:, 0].argsort()]
+    assert whistle.ndim ==2 and whistle.shape[1] == 2, f"whistle shape: {whistle.shape}"
 
-    # Group by x-coordinate and select one y-value per x
-    x_to_y = defaultdict(list)
-    for x, y in whistle:
-        x_to_y[x].append(y)
-    unique_whistle = np.array([(x, int(np.round(np.mean(y)))) for x, y in x_to_y.items()])
-    unique_whistle = unique_whistle[np.argsort(unique_whistle[:, 0])]
-
-    num_x = len(np.unique(unique_whistle[:, 0]))
-    if num_x != len(unique_whistle):
-        rprint(f"num_x: {(num_x, len(unique_whistle))}")
+    # connect fragmented whistle points
+    whistle = whistle.tolist()
+    whistle_ =[whistle[0]]
+    for i in range(len(whistle) - 1):
+        current = whistle[i]
+        next_point = whistle[i + 1]
+        
+        # Generate intermediate points between current and next_point
+        if method == 'bresenham':
+            intermediate_points = bresenham_line(current, next_point)
+        elif method == 'midpoint':
+            intermediate_points = midpoint_interpolation(current, next_point)
+        elif method == 'bezier':
+            intermediate_points = bezier_grid_path(whistle, i, i+1)
+        elif method == 'weighted':
+            intermediate_points = simple_weighted_path(whistle, i)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        
+        # Add intermediate points to trajectory (skip the first one as it's already included)
+        whistle_.extend(intermediate_points[1:])
     
-
-    whisle_x = unique_whistle[:, 0]
-    for i in range(whisle_x[0], whisle_x[-1]+1):
-        if i not in unique_whistle[:, 0]:
-            rprint(f"has missing x: {i}")
-            break
+    # Group by x-coordinate and select one y-value per x
+    whistle_ = np.array(whistle_)
+    unique_x = np.unique(whistle_[:, 0])
+    averaged_y = np.zeros_like(unique_x)
+    for i, x in enumerate(unique_x):
+        y_values = whistle_[whistle_[:, 0] == x][:, 1]
+        averaged_y[i] = int(np.round(np.mean(y_values)))
+    unique_whistle = np.column_stack((unique_x, averaged_y))
 
     return unique_whistle
 
-
-def gather_whistles(coco_gt:COCO, coco_dt:COCO, debug=False):
+def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
     """gather per image whistles from instance masks"""
     
     if debug:
         coco_dt = deepcopy(coco_gt)
+        for ann in coco_dt.anns.values():
+            ann['score'] = 1.0
     img_to_whistles = dict()
     for img_id in coco_dt.imgs.keys():
         img = coco_dt.imgs[img_id]
@@ -315,9 +558,18 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, debug=False):
             continue
         gt_anns = coco_gt.imgToAnns[img_id]
         gt_masks = [coco_gt.annToMask(ann) for ann in gt_anns]
-        dt_masks = [coco_dt.annToMask(ann) for ann in dt_anns]
+
+        dt_masks = []
+        for i, ann in enumerate(dt_anns):
+            score = ann['score']
+            mask = coco_dt.annToMask(ann)
+            if score > filter:
+                dt_masks.append(mask)
+            else:
+                continue
+
         gt_whistles = [mask_to_whistle(mask) for mask in gt_masks]
-        dt_whistles = [mask_to_whistle(mask) for mask in dt_masks]
+        dt_whistles = [mask_to_whistle(mask) for mask in dt_masks if mask.sum()>0]
         if debug:
             assert len(gt_whistles) == len(dt_whistles), f"gt and dt should have the \
             same number of whistles, gt: {len(gt_whistles)}, dt: {len(dt_whistles)}"
@@ -329,7 +581,8 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, debug=False):
             'img_id': img_id,
         }
     sum_gts = sum([len(whistles['gts']) for whistles in img_to_whistles.values()])
-    rprint(f'gathered {len(img_to_whistles)} images with {sum_gts} whistles')
+    sum_dts = sum([len(whistles['dts']) for whistles in img_to_whistles.values()])
+    rprint(f'gathered {len(img_to_whistles)} images with {sum_gts} gt whistles, {sum_dts} dt whistles')
     return img_to_whistles
 
 
@@ -516,7 +769,7 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(Config, args=unknown_args)
 
-    # bbox_dts, mask_dts, gt_coco = get_detections(cfg, model_name=known_args.model_name, debug=known_args.debug)
+    bbox_dts, mask_dts, gt_coco = get_detections(cfg, model_name=known_args.model_name, debug=known_args.debug)
     # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
     #     pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
 
