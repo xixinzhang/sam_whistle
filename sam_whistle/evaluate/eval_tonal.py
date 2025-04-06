@@ -17,7 +17,9 @@ from sam_whistle.utils import utils
 @dataclass
 class TonalStats:
     precision_valid: float
+    precision_all: float
     recall_valid: float
+    recall_all: float
     dev_mean: float
     dev_std: float
     coverage_mean: float
@@ -30,8 +32,10 @@ class TonalStats:
 
 def res_to_metric(res: TonalResults):
     precision_valid = res.dt_true_pos_valid / (res.dt_true_pos_valid + res.dt_false_pos_all + 1e-8)
+    precision_all = res.dt_true_pos_all / (res.dt_true_pos_all + res.dt_false_pos_all + 1e-8)
     gt_num = res.gt_matched_valid + res.gt_missed_valid
     recall_valid = res.gt_matched_valid / gt_num
+    recall_all = res.gt_matched_all / (res.gt_matched_all + res.gt_missed_all + 1e-8)
     dev_mean = np.mean(res.all_deviation)
     dev_std = np.std(res.all_deviation)
     coverage = np.array(res.all_covered_s) / np.array(res.all_dura)
@@ -44,7 +48,9 @@ def res_to_metric(res: TonalResults):
 
     stats = TonalStats(
         precision_valid=precision_valid,
+        precision_all=precision_all,
         recall_valid=recall_valid,
+        recall_all=recall_all,
         dev_mean=dev_mean,
         dev_std=dev_std,
         coverage_mean=coverage_mean,
@@ -155,7 +161,7 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
     for thre in threshold_list:
         print(f"{'#'*30} Threshold: {thre} {'#'*30}")
         table = PrettyTable()
-        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag"]
+        table.field_names = ["Stem", "GT_N", "Precision", "Recall", "F1", "Deviation", "Coverage", "Excess", "Frag", "Precision_all", "Recall_all"]
         res_all = TonalResults()
         for stem, tracker in trackers.items():
             res = extract_tonals(tracker, thre, visualize=visualize, output_dir=output_dir+f'/{thre}', stem=stem, axis=axis)
@@ -163,13 +169,16 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
             metrics = res_to_metric(res)
             precision = metrics.precision_valid
             recall = metrics.recall_valid
+            precision_all = metrics.precision_all
+            recall_all = metrics.recall_all
             prs[stem].append((precision, recall, thre))
             print(f'[{stem}] precision: {precision:.2f}, recall: {recall:.2f}, thre: {thre:.2f}, ov_valid: {res.dt_true_pos_valid}, false_dt: {res.dt_false_pos_all}, gt_matched: {res.gt_matched_valid}, gt_missed: {res.gt_missed_valid}')
-            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.4f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}'])
+            print(f'[{stem}] precision_all: {precision_all:.2f}, recall_all: {recall_all:.2f}, ov_all: {res.dt_true_pos_all}, gt_matched_all: {res.gt_matched_all}, gt_missed_all: {res.gt_missed_all}')
+            table.add_row([stem, metrics.gt_num, f'{metrics.precision_valid*100:.2f}', f'{metrics.recall_valid*100:.2f}', f'{utils.f1_pr(metrics.precision_valid, metrics.recall_valid):.4f}', f'{metrics.dev_mean:.2f}±{metrics.dev_std:.2f}', f'{metrics.coverage_mean:.2f}±{metrics.coverage_std:.2f}', f'{metrics.excess_mean:.2f}±{metrics.excess_std:.2f}' ,f'{metrics.frag:.2f}', f'{metrics.precision_all*100:.2f}', f'{metrics.recall_all*100:.2f}'] )
         
         metrics_all = res_to_metric(res_all)
         prs['all'].append((metrics_all.precision_valid, metrics_all.recall_valid, thre))
-        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}'])
+        table.add_row(['All', metrics_all.gt_num, f'{metrics_all.precision_valid*100:.2f}', f'{metrics_all.recall_valid*100:.2f}',f'{utils.f1_pr(metrics_all.precision_valid, metrics_all.recall_valid):.4f}', f'{metrics_all.dev_mean:.2f}±{metrics_all.dev_std:.2f}', f'{metrics_all.coverage_mean:.2f}±{metrics_all.coverage_std:.2f}',  f'{metrics_all.excess_mean:.2f}±{metrics_all.excess_std:.2f}',f'{metrics_all.frag:.2f}', f'{metrics_all.precision_all*100:.2f}', f'{metrics_all.recall_all*100:.2f}'])
         print(f'threreshold: {thre}')
         print(table)
 
