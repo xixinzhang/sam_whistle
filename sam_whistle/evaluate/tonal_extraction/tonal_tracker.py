@@ -242,12 +242,18 @@ class TonalTracker:
         
         self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
-            self.crop_top = self.origin_shape[0] - self.cfg.spect_cfg.crop_top
-            spect_power_db = spect_power_db[self.crop_top : -self.cfg.spect_cfg.crop_bottom+1]
+            # BUG:coco model should have input 769x1500
+            self.crop_top = self.cfg.spect_cfg.crop_top
+            self.crop_bottom = self.cfg.spect_cfg.crop_bottom
+            # spect_power_db = spect_power_db[-self.crop_top : -self.crop_bottom+1]  # [769-400: -40+1]
 
         # spect_raw and spect_snr are useless in this case
         # self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
-        self.H, self.W = spect_power_db.shape[-2:]
+        # self.H, self.W = spect_power_db.shape[-2:]
+
+        self.H = self.crop_top  - self.crop_bottom + 1
+        self.W = spect_power_db.shape[-1]
+
         spect_snr = np.zeros_like(spect_power_db)
         # block_size = self.block_size
         # for i in range(0, self.W, block_size):
@@ -309,6 +315,9 @@ class TonalTracker:
             weights[:, start:end] += 1
         
         pred_mask /= weights
+        self.conf_map = pred_mask[::-1, :]
+        if self.cfg.spect_cfg.crop:
+            pred_mask = pred_mask[self.crop_bottom : self.crop_top+1]
         self.spect_map = pred_mask
 
 
@@ -340,10 +349,13 @@ class TonalTracker:
             block = spect_map[..., start:end]  # (H, W)
             block = torch.tensor(np.stack([block, block, block], axis=0)).to(cfg.device).unsqueeze(0) # (1, 3, H, W)
             pred = model(block).cpu().numpy().squeeze()
-            pred_mask[::-1, start:end] += pred
+            pred_mask[::-1, start:end] += pred  # prepare for graph search order
             weights[:, start:end] += 1
         
         pred_mask /= weights
+        self.conf_map = pred_mask[::-1, :]
+        if self.cfg.spect_cfg.crop:
+            pred_mask = pred_mask[self.crop_bottom : self.crop_top+1]
         self.spect_map = pred_mask
     
     @torch.no_grad()

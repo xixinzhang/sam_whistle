@@ -61,7 +61,7 @@ def get_segment_annotation(trajs: List[np.array], start_frame:int):
             segment_trajs.append(segment_traj)
     return segment_trajs
 
-def polyline_to_polygon(traj: np.ndarray, width: float = 3)-> List[float]:
+def polyline_to_polygon(traj: np.ndarray, width: float = 3, n_frames =N_FRAMES)-> List[float]:
     """Convert polyline to polygon
     
     Args:
@@ -85,7 +85,7 @@ def polyline_to_polygon(traj: np.ndarray, width: float = 3)-> List[float]:
     if polygon.geom_type == "MultiPolygon":
         raise ValueError("The trajectory is too wide, resulting in multiple polygons")
     
-    polygon = clip_by_rect(polygon, 0, 0, N_FRAMES, NUM_FREQ_BINS)
+    polygon = clip_by_rect(polygon, 0, 0, n_frames, NUM_FREQ_BINS)
 
     if polygon.is_empty:
             return []
@@ -99,6 +99,8 @@ def polyline_to_polygon(traj: np.ndarray, width: float = 3)-> List[float]:
 
 def tf_to_pix(
     traj: np.ndarray,
+    num_freq_bins: int = NUM_FREQ_BINS,
+    width: int = N_FRAMES,
 ):
     """Convert time-frequency coordinates to pixel coordinates within a single spectrogram segment
 
@@ -112,11 +114,11 @@ def tf_to_pix(
     freqs = traj[:, 1]
     columns = times * FRAME_PER_SECOND + 0.5
     row_top = freqs / FREQ_BIN_RESOLUTION
-    rows = NUM_FREQ_BINS - row_top
+    rows = num_freq_bins - row_top
     rows = np.round(rows - 0.5).astype(int)
     columns = np.round(columns).astype(int)
     coords = np.unique(np.stack([columns, rows], axis=-1), axis=0) # remove duplicate points
-    valid_mask  = (coords[:, 0] >= 0) & (coords[:, 0] < N_FRAMES) & (coords[:, 1] >= 0) & (coords[:, 1] < NUM_FREQ_BINS)
+    valid_mask  = (coords[:, 0] >= 0) & (coords[:, 0] < width) & (coords[:, 1] >= 0) & (coords[:, 1] < num_freq_bins)
     return coords[valid_mask]
 
 def polygon_to_box(polygon: List[float]):
@@ -141,27 +143,29 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
-def get_detections(cfg, model_name='sam', debug=False):
-    whistle_coco_data = os.path.join(cfg.root_dir, 'spec_coco/val/data')
-    whistle_coco_label = os.path.join(cfg.root_dir, 'spec_coco/val/labels.json')
-
-    test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
-    gt_coco = test_set.coco
-
+def get_detections_record(cfg, model_name, debug=False):
+    """Get the detection of each record"""
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
+    
+    # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
+    # stems = ["Qx-Tt-SCI0608-Ziph-060819-074737"]
+    # stems = ['Qx-Dc-SC03-TAT09-060516-171606']
+    
+    
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
         stems = ['Qx-Dd-SCI0608-N1-060814-150255']
         # stems = stems[:6]
+
     trackers = {}
+    img_to_whistles = dict()
+    scores_all = []
 
-    bbox_dts = []
-    mask_dts = []
-
-    gt_image_ids = []
-    # First, collect all the detection results
-    for stem in stems:
+    for i, stem in enumerate(stems):
+        tonal_dts = []
+        tonal_gts = []
+        scores = []
         tracker = TonalTracker(cfg, stem)
         if model_name == 'sam':
             tracker.sam_inference()
@@ -176,11 +180,100 @@ def get_detections(cfg, model_name='sam', debug=False):
         tracker.get_tonals()
         dt_tonals = tracker.dt_tonals
         dt_tonals = [get_dense_annotation(traj) for traj in dt_tonals]
+        rprint(f"stem: {stem}, dt_tonals: {len(dt_tonals)}")
+        gt_tonals = tracker.gt_tonals
+        gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
+        rprint(f"stem: {stem}, gt_tonals: {len(gt_tonals)}")
+
+        conf_map =tracker.conf_map
+        width = conf_map.shape[1]
+
+        def unique_pix(traj):
+            unique_x = np.unique(traj[:, 0])
+            averaged_y = np.zeros_like(unique_x)
+            for i, x in enumerate(unique_x):
+                y_values = traj[traj[:, 0] == x][:, 1]
+                averaged_y[i] = int(np.round(np.mean(y_values)))
+            unique_traj = np.column_stack((unique_x, averaged_y))
+            return unique_traj
+
+        plgs = []
+        for i, gt_traj in enumerate(gt_tonals):
+            traj_pix = tf_to_pix(gt_traj, width=width)
+            # traj_pix = unique_pix(traj_pix)
+            tonal_gts.append(traj_pix)
+            gt_traj_plg = polyline_to_polygon(traj_pix, n_frames=width)
+            plgs.append(gt_traj_plg)
+            
+
         if debug:
-            gt_tonals = tracker.gt_tonals
-            gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
-            rprint(f"stem: {stem}, dt_tonals: {len(dt_tonals)}")
-            rprint(f"stem: {stem}, gt_tonals: {len(gt_tonals)}")
+            dt_tonals = deepcopy(gt_tonals)
+            conf_map = poly2mask(plgs, *conf_map.shape)
+
+        for dt_traj in dt_tonals:
+            traj_pix = tf_to_pix(dt_traj, width=width)
+            score = get_traj_score(conf_map, deepcopy(traj_pix))
+            scores.append(score)
+            # traj_pix = unique_pix(traj_pix)
+            tonal_dts.append(traj_pix)
+
+        rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
+        img_to_whistles[stem] = {
+            'gts': tonal_gts,
+            'dts': tonal_dts,
+            # 'scores': np.mean(scores).item(),
+            'img_id': stem,
+            'w': width,
+        }
+        scores_all.extend(scores)
+    
+    rprint(f'ALL scores: {np.mean(scores_all):.4f}, std: {np.std(scores_all):.4f}, min: {np.min(scores_all):.4f}, max: {np.max(scores_all):.4f}')
+    return img_to_whistles
+
+
+def get_detections_coco(cfg, model_name='sam', debug=False):
+    whistle_coco_data = os.path.join(cfg.root_dir, 'spec_coco/val/data')
+    whistle_coco_label = os.path.join(cfg.root_dir, 'spec_coco/val/labels.json')
+
+    test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
+    gt_coco = test_set.coco
+
+    stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
+    stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
+    
+    if debug:
+        # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
+        stems = ['Qx-Dd-SCI0608-N1-060814-150255']
+        # stems = stems[:1]
+    trackers = {}
+
+    bbox_dts = []
+    mask_dts = []
+    # mask_gts = []
+    scores_all = []
+
+    gt_image_ids = []
+    # First, collect all the detection results
+    for stem in stems:
+        scores = []
+        tracker = TonalTracker(cfg, stem)
+        if model_name == 'sam':
+            tracker.sam_inference()
+        elif model_name == 'sam2':
+            tracker.sam2_inference()
+        elif model_name == 'dw':
+            tracker.dw_inference()
+        else:
+            raise ValueError(f"Unknown model name: {model_name}")
+        trackers[stem] = tracker
+        tracker.build_graph()
+        tracker.get_tonals()
+        dt_tonals = tracker.dt_tonals
+        dt_tonals = [get_dense_annotation(traj) for traj in dt_tonals]
+        rprint(f"stem: {stem}, dt_tonals: {len(dt_tonals)}")
+        gt_tonals = tracker.gt_tonals
+        gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
+        rprint(f"stem: {stem}, gt_tonals: {len(gt_tonals)}")
 
         stem_img_ids = test_set.audio_to_image[stem]
         gt_image_ids.extend(stem_img_ids)
@@ -190,20 +283,32 @@ def get_detections(cfg, model_name='sam', debug=False):
             info = test_set[data_index]['info']
             start_frame = info['start_frame']
             # img = test_set[data_index]['img']
-            spec_map = tracker.spect_map[::-1, start_frame:start_frame + N_FRAMES]  # lower frequency at the bottom
+            # conf_map = tracker.spect_map[::-1, start_frame:start_frame + N_FRAMES]  # lower frequency at the bottom
+            conf_map = tracker.conf_map[:, start_frame:start_frame + N_FRAMES]
             dt_trajs = get_segment_annotation(dt_tonals, start_frame)
             # Note: num does not match the anno file, some are in train, some in test
+            gt_trajs = get_segment_annotation(gt_tonals, start_frame)
             
             if debug:
-                gt_trajs = get_segment_annotation(gt_tonals, start_frame)
                 dt_trajs = deepcopy(gt_trajs)
+                plgs = []
+                for gt_traj in gt_trajs:
+                    gt_traj_pix = tf_to_pix(gt_traj)
+                    gt_traj_plg = polyline_to_polygon(gt_traj_pix)
+                    plgs.append(gt_traj_plg)
+                conf_map = poly2mask(plgs, NUM_FREQ_BINS, N_FRAMES)
+
+            if len(dt_trajs) < 1:
+                continue
 
             for dt_traj in dt_trajs:
-                traj_pix = tf_to_pix(dt_traj)
+                traj_pix = tf_to_pix(dt_traj)  # pixel coordinates in 769x1500 low freq at the bottom
                 traj_plg = polyline_to_polygon(traj_pix)
                 if not traj_plg:
                     continue
-                score = get_traj_score(spec_map, traj_pix, tracker.crop_top)
+
+                score = get_traj_score(conf_map, deepcopy(traj_pix))
+                scores.append(score)
                 bbox = polygon_to_box(traj_plg)
                 dt_bbox_dict = {
                     'image_id': img_id,
@@ -219,15 +324,20 @@ def get_detections(cfg, model_name='sam', debug=False):
                     'image_id': img_id,
                     'segmentation': rle,
                     'category_id': 1,
-                    'score': float(score)  # Ensure score is a float for JSON serialization
+                    'score': float(score),  # Ensure score is a float for JSON serialization
+                    'traj_pix': traj_pix,
                 }
 
                 bbox_dts.append(dt_bbox_dict)
                 mask_dts.append(dt_mask_dict)
+        rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
+        scores_all.extend(scores)
 
+    rprint(f'ALL scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
     # Evaluate metrics
     bbox_coco = gt_coco.loadRes(bbox_dts)
     mask_coco = gt_coco.loadRes(mask_dts)
+    # gt_coco = gt_coco.loadRes(mask_gts)
     
     if debug:
         def check_areas(coco):
@@ -258,11 +368,11 @@ def get_detections(cfg, model_name='sam', debug=False):
     return bbox_coco, mask_coco, gt_coco
 
 
-def get_traj_score(spec_map, traj, cut_top):
+def get_traj_score(conf_map, traj):
     """Get the score as the average confidence of the trajectory"""
-    traj[:, 1]  = traj[:, 1] - cut_top
-    spec_traj = spec_map[traj[:, 1], traj[:, 0]]
-    score = spec_traj.mean()
+    # traj[:, 1]  = traj[:, 1] - cut_top
+    conf_traj = conf_map[traj[:, 1], traj[:, 0]]
+    score = conf_traj.mean()
     return score
 
 
@@ -426,6 +536,7 @@ def simple_weighted_path(points, i, window=2):
     
     return path
 
+
 def bezier_grid_path(points, start_idx, end_idx, steps=10):
     """
     Creates a Bezier curve between points and snaps it to grid.
@@ -506,6 +617,7 @@ def mask_to_whistle(mask, method='bresenham'):
     skeleton = skeletonize(mask).astype(np.uint8)
     whistle = np.array(np.nonzero(skeleton)).T # [(y, x]
     whistle = np.flip(whistle, axis=1)  # [(x, y)]
+    whistle = np.unique(whistle, axis=0)  # remove duplicate points
     whistle = whistle[whistle[:, 0].argsort()]
     assert whistle.ndim ==2 and whistle.shape[1] == 2, f"whistle shape: {whistle.shape}"
 
@@ -549,6 +661,7 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
         coco_dt = deepcopy(coco_gt)
         for ann in coco_dt.anns.values():
             ann['score'] = 1.0
+
     img_to_whistles = dict()
     for img_id in coco_dt.imgs.keys():
         img = coco_dt.imgs[img_id]
@@ -570,6 +683,7 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
 
         gt_whistles = [mask_to_whistle(mask) for mask in gt_masks]
         dt_whistles = [mask_to_whistle(mask) for mask in dt_masks if mask.sum()>0]
+
         if debug:
             assert len(gt_whistles) == len(dt_whistles), f"gt and dt should have the \
             same number of whistles, gt: {len(gt_whistles)}, dt: {len(dt_whistles)}"
@@ -601,7 +715,7 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
     
     if debug:
         for i in range(dt_num):
-           assert (gts[i]== dts[i]).all(), "gt and dt should not be the same"
+           assert (gts[i]== dts[i]).all(), f"gt and dt should not be the same {len(gts)} vs {len(dts)}"
 
     for gt_idx, gt in enumerate(gts):
         gt_start_x = max(0, gt[:, 0].min())
@@ -636,7 +750,7 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
         # which requires addition input
         dt_start_xs, dt_end_xs = dt_ranges[:, 0], dt_ranges[:, 1]
         ovlp_cond = (dt_start_xs <= gt_start_x) & (dt_end_xs >= gt_start_x) \
-                        | (dt_start_xs>= gt_start_x) & (dt_end_xs <= gt_end_x)
+                        | (dt_start_xs>= gt_start_x) & (dt_start_xs <= gt_end_x)
         ovlp_dt_ids = np.nonzero(ovlp_cond)[0]
 
         matched = False
@@ -657,8 +771,8 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
             gt_ovlp_ys = gt[:, 1][np.searchsorted(gt[:, 0], dt_ovlp_xs)]
             deviation = np.abs(gt_ovlp_ys - dt_ovlp_ys)
             deviation_tolerence = 350 / 125
-            # if debug:
-            #     deviation_tolerence = 0.1
+            if debug:
+                deviation_tolerence = 0.1
             if len(deviation)> 0 and np.mean(deviation) <= deviation_tolerence:
                 matched = True
                 
@@ -701,6 +815,7 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
                 rprint(f'img_id: {img_id}, dt_id:{dt_fp_idx}, fp_num: {len(dt_false_pos_all)}')
                 rprint(f'dt: {dts[dt_fp_idx]}')
                 rprint(f'gt: {gts[dt_fp_idx]}')
+                
     res = {
         # TODO TP and FN are calculated based on dt and gt respectively
         'dt_false_pos_all': len(dt_false_pos_all),
@@ -765,20 +880,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--type", type=str, default="coco")
     known_args, unknown_args = parser.parse_known_args()
 
     cfg = tyro.cli(Config, args=unknown_args)
+    # known_args.debug = True
+    # cfg..thre_norm = 0.06939393939393938
+    # cfg..thre_norm = 0.05
+    if known_args.type == 'coco':
+        bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
+        
+        # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
+        #     pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
 
-    bbox_dts, mask_dts, gt_coco = get_detections(cfg, model_name=known_args.model_name, debug=known_args.debug)
-    # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
-    #     pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
+        # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
+        #     dt_results = pickle.load(f)
+        #     gt_coco = dt_results['gt_coco']
+        #     mask_dts = dt_results['mask_coco']
 
-    with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
-        dt_results = pickle.load(f)
-        gt_coco = dt_results['gt_coco']
-        mask_dts = dt_results['mask_coco']
+        img_to_whistles = gather_whistles(gt_coco, mask_dts, debug=known_args.debug)
+    else:
 
-    img_to_whistles = gather_whistles(gt_coco, mask_dts, debug=known_args.debug)
+        img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
+
     res = accumulate_wistle_results(img_to_whistles, debug=known_args.debug)
     rprint(res)
     summary = sumerize_whisle_results(res)
