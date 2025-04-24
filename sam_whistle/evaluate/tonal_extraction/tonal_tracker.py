@@ -261,6 +261,7 @@ class TonalTracker:
         print(f'Loaded spectrogram from {stem}: {spect_power_db.shape} shape: {spect_power_db.shape}, min: {spect_power_db.min():.2f}, max: {spect_power_db.max():2f}')
         
         self.start_cols, spect_power_db = self._get_blocks(spect_power_db)
+        self.raw_spect = spect_power_db
        
         if self.cfg.use_conf:
             # spect_power_db = np.flip(spect_power_db, axis=0)

@@ -3,10 +3,12 @@ from copy import deepcopy
 import json
 import os
 from typing import List
+import cv2
 import tyro
 import argparse
 import pickle
 from rich import print as rprint
+import copy
 
 import numpy as np
 import pycocotools.mask as maskUtils
@@ -148,24 +150,19 @@ def get_detections_record(cfg, model_name, debug=False):
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
     
-    # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
-    # stems = ["Qx-Tt-SCI0608-Ziph-060819-074737"]
-    # stems = ['Qx-Dc-SC03-TAT09-060516-171606']
-    
-    
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
-        stems = ['Qx-Dd-SCI0608-N1-060814-150255']
-        # stems = stems[:6]
+        # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
+        # stems = ['Qx-Dc-CC0411-TAT11-CH2-041114-154040-s']
+        # stems=['Qx-Dc-SC03-TAT09-060516-171606']
+        # stems = ['Qx-Dd-SC03-TAT09-060516-211350']
+        stems = stems[:1]
 
     trackers = {}
     img_to_whistles = dict()
     scores_all = []
 
     for i, stem in enumerate(stems):
-        tonal_dts = []
-        tonal_gts = []
-        scores = []
         tracker = TonalTracker(cfg, stem)
         if model_name == 'sam':
             tracker.sam_inference()
@@ -196,30 +193,41 @@ def get_detections_record(cfg, model_name, debug=False):
                 averaged_y[i] = int(np.round(np.mean(y_values)))
             unique_traj = np.column_stack((unique_x, averaged_y))
             return unique_traj
-
+        
+        tonal_dts = []
+        tonal_gts = []
+        bounds_gt = []
         plgs = []
+        scores = []
         for i, gt_traj in enumerate(gt_tonals):
-            traj_pix = tf_to_pix(gt_traj, width=width)
-            # traj_pix = unique_pix(traj_pix)
+            traj_pix = tf_to_pix(gt_traj, width=tracker.W)
+            traj_pix = unique_pix(traj_pix)
+            try:
+                _, bound = get_traj_valid((tracker.raw_spect*255).numpy().astype(np.uint8), traj_pix)
+            except:
+                import pdb; pdb.set_trace()
             tonal_gts.append(traj_pix)
+            bounds_gt.append(bound)
+
             gt_traj_plg = polyline_to_polygon(traj_pix, n_frames=width)
             plgs.append(gt_traj_plg)
             
 
-        if debug:
-            dt_tonals = deepcopy(gt_tonals)
-            conf_map = poly2mask(plgs, *conf_map.shape)
+        # if debug:
+        #     dt_tonals = deepcopy(gt_tonals)
+        #     conf_map = poly2mask(plgs, *conf_map.shape)
 
         for dt_traj in dt_tonals:
             traj_pix = tf_to_pix(dt_traj, width=width)
-            score = get_traj_score(conf_map, deepcopy(traj_pix))
-            scores.append(score)
-            # traj_pix = unique_pix(traj_pix)
+            # score = get_traj_score(conf_map, deepcopy(traj_pix))
+            # scores.append(score)
+            traj_pix = unique_pix(traj_pix)
             tonal_dts.append(traj_pix)
 
-        rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
+        rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}') if len(scores) > 0 else None
         img_to_whistles[stem] = {
             'gts': tonal_gts,
+            'boudns_gt': bounds_gt,
             'dts': tonal_dts,
             # 'scores': np.mean(scores).item(),
             'img_id': stem,
@@ -227,7 +235,10 @@ def get_detections_record(cfg, model_name, debug=False):
         }
         scores_all.extend(scores)
     
-    rprint(f'ALL scores: {np.mean(scores_all):.4f}, std: {np.std(scores_all):.4f}, min: {np.min(scores_all):.4f}, max: {np.max(scores_all):.4f}')
+    rprint(f'ALL scores: {np.mean(scores_all):.4f}, std: {np.std(scores_all):.4f}, min: {np.min(scores_all):.4f}, max: {np.max(scores_all):.4f}') if len(scores_all) > 0 else None
+    sum_gts = sum([len(whistles['gts']) for whistles in img_to_whistles.values()])
+    sum_dts = sum([len(whistles['dts']) for whistles in img_to_whistles.values()])
+    rprint(f'gathered gts: {sum_gts}, dts: {sum_dts}')
     return img_to_whistles
 
 
@@ -374,6 +385,18 @@ def get_traj_score(conf_map, traj):
     conf_traj = conf_map[traj[:, 1], traj[:, 0]]
     score = conf_traj.mean()
     return score
+
+def get_traj_valid(conf_map, traj):
+
+    conf_traj = conf_map[traj[:, 1], traj[:, 0]]
+    score = conf_traj.mean()
+    sorted_idx = np.argsort(conf_traj)
+    ratio = 0.3
+    if len(sorted_idx) > 0:
+        bound = conf_traj[sorted_idx[int(len(sorted_idx) * ratio)]]
+        return score, bound
+    else:
+        raise ValueError("No valid points in the trajectory")
 
 
 def bresenham_line(p1, p2):
@@ -654,7 +677,7 @@ def mask_to_whistle(mask, method='bresenham'):
 
     return unique_whistle
 
-def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
+def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, root_dir=None, debug=False):
     """gather per image whistles from instance masks"""
     
     if debug:
@@ -676,20 +699,32 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
         for i, ann in enumerate(dt_anns):
             score = ann['score']
             mask = coco_dt.annToMask(ann)
-            if score > filter:
+            if score > filter_dt:
                 dt_masks.append(mask)
             else:
                 continue
 
         gt_whistles = [mask_to_whistle(mask) for mask in gt_masks]
+        
+        bounds = []
+        gt_whistles_ = []
+        img_info = coco_gt.imgs[img_id]
+        image = cv2.imread(os.path.join(root_dir,'spec_coco/val/data' , img_info['file_name']))
+        for whistle in gt_whistles:
+            whistle = np.array(whistle)
+            score, bound = get_traj_valid(image[...,0], whistle)
+            bounds.append(bound)
+            gt_whistles_.append(whistle)
+        gt_whistles = gt_whistles_
         dt_whistles = [mask_to_whistle(mask) for mask in dt_masks if mask.sum()>0]
-
+        
         if debug:
             assert len(gt_whistles) == len(dt_whistles), f"gt and dt should have the \
             same number of whistles, gt: {len(gt_whistles)}, dt: {len(dt_whistles)}"
         
         img_to_whistles[img['id']] = {
             'gts': gt_whistles,
+            'boudns_gt': bounds,
             'dts': dt_whistles,
             'w': w,
             'img_id': img_id,
@@ -700,12 +735,13 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter=0,  debug=False):
     return img_to_whistles
 
 
-def compare_whistles(gts, dts, w, img_id, debug=False):
+def compare_whistles(gts, dts, w, img_id, boudns_gt, valid_gt, debug=False):
     """given whistle gt and dt in evaluation unit and get comparison results
     Args:
         gts, dts: N, 2 in format of y, x(or t, f)
     """
     gt_num = len(gts)
+    boudns_gt = np.array(boudns_gt)
     gt_ranges = np.zeros((gt_num, 2))
     gt_durations = np.zeros(gt_num)
 
@@ -714,8 +750,9 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
     dt_durations = np.zeros(dt_num)
     
     if debug:
-        for i in range(dt_num):
-           assert (gts[i]== dts[i]).all(), f"gt and dt should not be the same {len(gts)} vs {len(dts)}"
+        # for i in range(dt_num):
+        #    assert (gts[i]== dts[i]).all(), f"gt and dt should not be the same {len(gts)} vs {len(dts)}"
+        pass
 
     for gt_idx, gt in enumerate(gts):
         gt_start_x = max(0, gt[:, 0].min())
@@ -732,8 +769,11 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
     
     dt_false_pos_all = list(range(dt_num))
     dt_true_pos_all = []
+    dt_true_pos_valid = []
     gt_matched_all = []
+    gt_matched_valid = []
     gt_missed_all = []
+    gt_missed_valid = []
     all_deviation = []
     all_covered = []
     all_dura = []
@@ -760,6 +800,14 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
         # dt_matched = []
         # dt_matched_dev = []
         # Note remove duration filter short < 75 pix whistle
+
+        valid = True
+        if valid_gt:
+            if gt_dura < 75: # or boudns_gt[gt_idx] < 3:
+                valid= False
+        # rprint(f'valid:{valid}, gt_dura: {gt_dura}, boudns_gt: {boudns_gt[gt_idx]}')
+
+
         for ovlp_dt_idx in ovlp_dt_ids:
             ovlp_dt = dts[ovlp_dt_idx]
             dt_xs, dt_ys = ovlp_dt[:, 0], ovlp_dt[:, 1]
@@ -772,13 +820,13 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
             deviation = np.abs(gt_ovlp_ys - dt_ovlp_ys)
             deviation_tolerence = 350 / 125
             if debug:
-                deviation_tolerence = 0.1
+                # deviation_tolerence = 0.1
+                pass
             if len(deviation)> 0 and np.mean(deviation) <= deviation_tolerence:
                 matched = True
                 
                 # cnt += 1
                 # dt_matched.append(ovlp_dt_idx)
-
                 if ovlp_dt_idx in dt_false_pos_all:
                     dt_false_pos_all.remove(ovlp_dt_idx)
                 # TODO: has multiplications
@@ -789,7 +837,10 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
                 # dt_matched_dev.append(deviation)
                 
                 covered += dt_ovlp_xs.max() - dt_ovlp_xs.min() + 1
-                
+                if valid:
+                    dt_true_pos_valid.append(ovlp_dt_idx)
+
+
         # if debug and cnt > 1:
         #     rprint(f"img_id: {img_id}, multiplication gt_id: {gt_idx} cnt: {cnt}")
         #     rprint(f"gt: {gt.T}",)
@@ -800,8 +851,12 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
         
         if matched:
             gt_matched_all.append(gt_idx)
+            if valid:
+                gt_matched_valid.append(gt_idx)
         else:
             gt_missed_all.append(gt_idx)
+            if valid:
+                gt_missed_valid.append(gt_idx)
 
         if matched:
             gt_deviation = np.mean(deviations)
@@ -810,11 +865,12 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
             all_dura.append(gt_dura)
 
     if debug:
-        if dt_false_pos_all:
-            for dt_fp_idx in dt_false_pos_all:
-                rprint(f'img_id: {img_id}, dt_id:{dt_fp_idx}, fp_num: {len(dt_false_pos_all)}')
-                rprint(f'dt: {dts[dt_fp_idx]}')
-                rprint(f'gt: {gts[dt_fp_idx]}')
+        # if dt_false_pos_all:
+        #     for dt_fp_idx in dt_false_pos_all:
+        #         rprint(f'img_id: {img_id}, dt_id:{dt_fp_idx}, fp_num: {len(dt_false_pos_all)}')
+        #         rprint(f'dt: {dts[dt_fp_idx]}')
+        #         # rprint(f'gt: {gts[dt_fp_idx]}')
+        pass
                 
     res = {
         # TODO TP and FN are calculated based on dt and gt respectively
@@ -822,6 +878,9 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
         'dt_true_pos_all': len(dt_true_pos_all),
         'gt_matched_all': len(gt_matched_all),
         'gt_missed_all': len(gt_missed_all),
+        'dt_true_pos_valid': len(dt_true_pos_valid),
+        'gt_matched_valid': len(gt_matched_valid),
+        'gt_missed_valid': len(gt_missed_valid),
         'all_deviation': all_deviation,
         'all_covered': all_covered,
         'all_dura': all_dura
@@ -829,47 +888,67 @@ def compare_whistles(gts, dts, w, img_id, debug=False):
     return res
 
 
-def accumulate_wistle_results(img_to_whistles, debug=False):
+def accumulate_wistle_results(img_to_whistles,valid_gt, debug=False):
     accumulated_res = {
         'dt_false_pos_all': 0,
         'dt_true_pos_all': 0,
         'gt_matched_all': 0,
         'gt_missed_all': 0,
+        'dt_true_pos_valid': 0,
+        'gt_matched_valid': 0,
+        'gt_missed_valid': 0,
         'all_deviation': [],
         'all_covered': [],
         'all_dura': []
     }
     for img_id, whistles in img_to_whistles.items():
-        res = compare_whistles(**whistles, debug=debug)
+        res = compare_whistles(**whistles, valid_gt = valid_gt, debug=debug)
+        rprint(f'img_id: {img_id}')
+        rprint(sumerize_whisle_results(res))
         accumulated_res['dt_false_pos_all'] += res['dt_false_pos_all']
         accumulated_res['dt_true_pos_all'] += res['dt_true_pos_all']
+        accumulated_res['dt_true_pos_valid'] += res['dt_true_pos_valid']
         accumulated_res['gt_matched_all'] += res['gt_matched_all']
+        accumulated_res['gt_matched_valid'] += res['gt_matched_valid']
         accumulated_res['gt_missed_all'] += res['gt_missed_all']
+        accumulated_res['gt_missed_valid'] += res['gt_missed_valid']
         accumulated_res['all_deviation'].extend(res['all_deviation'])
         accumulated_res['all_covered'].extend(res['all_covered'])
         accumulated_res['all_dura'].extend(res['all_dura'])
-    accumulated_res['all_deviation'] = np.mean(accumulated_res['all_deviation']).item()
-    accumulated_res['all_covered'] = np.sum(accumulated_res['all_covered']).item()
-    accumulated_res['all_dura'] = np.sum(accumulated_res['all_dura']).item()
     return accumulated_res
 
 def sumerize_whisle_results(accumulated_res):
     """sumerize the whistle results"""
+    accumulated_res = copy.deepcopy(accumulated_res)
     dt_fp = accumulated_res['dt_false_pos_all']
     dt_tp = accumulated_res['dt_true_pos_all']
+    dt_tp_valid = accumulated_res['dt_true_pos_valid']
     gt_tp = accumulated_res['gt_matched_all']
+    gt_tp_valid = accumulated_res['gt_matched_valid']
     gt_fn = accumulated_res['gt_missed_all']
+    gt_fn_valid = accumulated_res['gt_missed_valid']
 
     precision = dt_tp / (dt_tp + dt_fp) if (dt_tp + dt_fp) > 0 else 0
+    precision_valid = dt_tp_valid / (dt_tp_valid + dt_fp) if (dt_tp_valid + dt_fp) > 0 else 0
     recall = gt_tp / (gt_tp + gt_fn) if (gt_tp + gt_fn) > 0 else 0
+    recall_valid = gt_tp_valid / (gt_tp_valid + gt_fn_valid) if (gt_tp_valid + gt_fn_valid) > 0 else 0
     frag = dt_tp / gt_tp if gt_tp > 0 else 0
+    frag_valid = dt_tp_valid / gt_tp_valid if gt_tp_valid > 0 else 0
+
+    accumulated_res['all_deviation'] = np.mean(accumulated_res['all_deviation']).item()
+    accumulated_res['all_covered'] = np.sum(accumulated_res['all_covered']).item()
+    accumulated_res['all_dura'] = np.sum(accumulated_res['all_dura']).item()
     coverage = accumulated_res['all_covered'] / accumulated_res['all_dura'] if accumulated_res['all_dura'] > 0 else 0
 
     summary = {
+        'gt_n':(gt_tp_valid + gt_fn_valid), 
         'precision': precision,
         'recall': recall,
         'frag': frag,
-        'coverage': coverage
+        'coverage': coverage,
+        'precision_valid': precision_valid,
+        'recall_valid': recall_valid,
+        'frag_valid': frag_valid,
     }
     return summary
 
@@ -885,26 +964,24 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(Config, args=unknown_args)
     # known_args.debug = True
-    # cfg..thre_norm = 0.06939393939393938
-    # cfg..thre_norm = 0.05
+    # cfg.thre_norm = 0.06939393939393938
+    # cfg.thre_norm = 0.05
     if known_args.type == 'coco':
-        bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
+        # bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
         
         # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
         #     pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
 
-        # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
-        #     dt_results = pickle.load(f)
-        #     gt_coco = dt_results['gt_coco']
-        #     mask_dts = dt_results['mask_coco']
+        with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
+            dt_results = pickle.load(f)
+            gt_coco = dt_results['gt_coco']
+            mask_dts = dt_results['mask_coco']
 
-        img_to_whistles = gather_whistles(gt_coco, mask_dts, debug=known_args.debug)
+        img_to_whistles = gather_whistles(gt_coco, mask_dts, root_dir=cfg.root_dir, debug=known_args.debug)
     else:
-
         img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
 
-    res = accumulate_wistle_results(img_to_whistles, debug=known_args.debug)
-    rprint(res)
+    res = accumulate_wistle_results(img_to_whistles, valid_gt=True, debug=known_args.debug)
     summary = sumerize_whisle_results(res)
     rprint(summary)
 
