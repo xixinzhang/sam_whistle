@@ -417,7 +417,7 @@ def visualize_array(
     )
 
     if filename is not None and save_dir is not None:
-        save_path = f"{save_dir}/{filename}.png"
+        save_path = f"{save_dir}/{filename}.svg"
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         fig.savefig(save_path, dpi=dpi)
@@ -441,7 +441,7 @@ def plot_spect(spect, filename=None, save_dir="outputs", cmap='bone', pix_tick=F
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
+        visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=100, bottom_margin_px=80, top_margin_px=15, right_margin_px=25 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)', label_size=25, tick_size=20)
     else:
         visualize_array(spect, filename, save_dir, cmap= cmap, left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
@@ -458,7 +458,7 @@ def plot_binary_mask(mask, filename=None, save_dir="outputs", pix_tick=False, ax
         x_ticks = np.linspace(0, mask.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
+        visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=100, bottom_margin_px=80, top_margin_px=15, right_margin_px=25 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)',label_size=25, tick_size=20)
     else:
         visualize_array(mask, filename, save_dir, cmap='bone', left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
@@ -476,7 +476,7 @@ def plot_mask_over_spect(spect, mask, filename=None, save_dir="outputs", cmap='b
         x_ticks = np.linspace(0, spect.shape[1] - 1, num=20, endpoint=True, dtype=int)
         x_labels = x_ticks
     if axis:
-        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)')
+        visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=100, bottom_margin_px=80, top_margin_px=15, right_margin_px=25 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi, x_label='Time (s)', y_label='Frequency (kHz)',label_size=25, tick_size=20)
     else:
         visualize_array(spect, filename, save_dir, cmap=cmap, mask = mask, random_colors=random_colors, mask_alpha=1,  left_margin_px=0, bottom_margin_px=0, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], dpi=dpi)
 
@@ -497,7 +497,7 @@ def plot_points_over_spect(spect, points, filename=None, save_dir="outputs", cma
             "c": "green",
             # "marker": "*",
             "s": 1,
-        }],left_margin_px=60, bottom_margin_px=60, top_margin_px=10, right_margin_px=20, y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], x_label='Time (s)', y_label='Frequency (kHz)')
+        }],left_margin_px=100, bottom_margin_px=80, top_margin_px=15, right_margin_px=25 , y_ticks_lables= [y_ticks, y_labels], x_ticks_lables= [x_ticks, x_labels], x_label='Time (s)', y_label='Frequency (kHz)',label_size=25, tick_size=20)
     else:
         visualize_array(spect, filename, save_dir, cmap=cmap, points=points,  point_kwargs=[{
             "c": "green",

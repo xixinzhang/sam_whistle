@@ -123,6 +123,8 @@ def eval_graph_search(cfg: TonalConfig, model_name='graph_search', stems=None, o
         stems += json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))['train']
     elif isinstance(stems, str):
         stems = [stems]
+    elif isinstance(stems, list):
+        pass
     else:
         raise ValueError("Invalid stems")
 
@@ -222,6 +224,7 @@ if __name__ == "__main__":
     if not args.eval_multiple:
         if not cfg.debug:
             stem = None
+            stem = ["Qx-Dc-CC0411-TAT11-CH2-041114-154040-s","QX-Dc-FLIP0610-VLA-061015-165000"]
         else:
             stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
             stem = "QX-Dc-FLIP0610-VLA-061015-165000"
