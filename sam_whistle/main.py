@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from sam_whistle.config import (DWConfig, FCNEncoderConfig, FCNSpectConfig,
                                 SAMConfig, SAM2Config)
-from sam_whistle.datasets import (WhistleCOCO, WhistleDataset, WhistlePatch,
+from sam_whistle.datasets import (WhistleCOCO, WhistleDataset, WhistlePatch, WhistlePatchCOCO,
                                   custom_collate_fn)
 from sam_whistle.evaluate.eval_conf import *
 from sam_whistle.model import (Detection_ResNet_BN2, FCN_encoder, FCN_Spect,
@@ -115,9 +115,6 @@ def run_sam2_coco(cfg: SAM2Config):
         writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 
-
-
-
 def run_sam_coco(cfg: SAMConfig):
     timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
     if cfg.exp_name is not None:
@@ -207,6 +204,81 @@ def run_sam_coco(cfg: SAMConfig):
         writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 
+def run_dw_coco(cfg: DWConfig):
+    timestamp = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    if cfg.exp_name is not None:
+        cfg.exp_name = "dw_coco"
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp)+"-"+cfg.exp_name)
+    else:
+        cfg.log_dir = os.path.join(cfg.log_dir, str(timestamp))
+    if not os.path.exists(cfg.log_dir):
+        os.makedirs(cfg.log_dir)
+    with open(os.path.join(cfg.log_dir, 'configs.json'), 'w') as f:
+        json.dump(asdict(cfg), f, indent=4)
+    writer = SummaryWriter(cfg.log_dir)
+
+    model = Detection_ResNet_BN2(cfg.width)
+    model.to(cfg.device)
+    model.apply(weights_init_He_normal)
+    loss_fn = Charbonnier_loss()
+    optimizer = optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.adam_decay)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=int(cfg.scheduler_stepsize), gamma=cfg.scheduler_gamma)
+
+    # Load data
+    print("#"*30 + " Loading data...."+"#"*30)
+    train_path = os.path.join(cfg.root_dir, 'train', 'data')
+    train_ann = os.path.join(cfg.root_dir, 'train', 'labels.json')
+    test_path = os.path.join(cfg.root_dir, 'val', 'data')
+    test_ann = os.path.join(cfg.root_dir, 'val', 'labels.json')
+    trainset = WhistlePatchCOCO(root=train_path, annFile=train_ann)
+    trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
+    testset = WhistlePatchCOCO(root=test_path, annFile=test_ann)
+    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
+    print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
+    
+    min_test_loss = torch.inf
+    # Train model
+    pbar = tqdm(range(cfg.iter_num))
+    it = 0
+    epoch = 0
+    while it < cfg.iter_num_more: 
+        batch_losses = []
+        model.train()
+        for i, data in enumerate(trainloader):
+            pbar.update(1)
+            it += 1
+            img, mask = data['img'], data['mask']
+            img = img.to(cfg.device)
+            mask = mask.to(cfg.device)
+            pred = model(img)
+            batch_loss = loss_fn(pred, mask)
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+            scheduler.step()
+            batch_losses.append(batch_loss.item())
+            writer.add_scalar('Loss/train_batch', batch_loss.item(), epoch*len(trainloader) + i)
+            if it == cfg.iter_num:
+                print("Training complete")
+                break
+        epoch += 1
+        epoch_loss = np.mean(batch_losses)
+        pbar.set_description(f"Epoch {epoch} Loss: {epoch_loss:.4f}")
+        writer.add_scalar('Loss/train_epoch', epoch_loss, epoch)
+        
+        # Test model and save Model
+        test_loss= evaluate_deep_prediction(cfg, False, model, testloader, loss_fn)
+        writer.add_scalar('Loss/test', test_loss, epoch)
+
+        if test_loss < min_test_loss:
+            print(f"Saving best model with test loss {test_loss} at epoch {epoch}")
+            min_test_loss = test_loss
+            
+            if it < cfg.iter_num:
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model.pth'))
+            else:
+                torch.save(model.state_dict(), os.path.join(cfg.log_dir, 'model_more.pth'))
+        writer.add_scalar('Loss/test_min', min_test_loss, epoch)
 
 def run_sam(cfg: SAMConfig):
     # Set seed
@@ -250,7 +322,7 @@ def run_sam(cfg: SAMConfig):
     trainset = WhistleDataset(cfg, 'train', transform=cfg.spect_cfg.transform)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
     testset = WhistleDataset(cfg, 'test', transform=cfg.spect_cfg.transform)
-    testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
+    testloader = DataLoader(testset, batch_size= cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
 
     min_test_loss = torch.inf
@@ -550,5 +622,8 @@ if __name__ == "__main__":
     elif args.model == 'sam2_coco':
         cfg = tyro.cli(SAM2Config, args=remaining)
         run_sam2_coco(cfg)
+    elif args.model == 'dw_coco':
+        cfg = tyro.cli(DWConfig, args=remaining)
+        run_dw_coco(cfg)
     else:
         raise ValueError("Model not recognized")

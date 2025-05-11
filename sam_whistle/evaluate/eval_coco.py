@@ -903,8 +903,8 @@ def accumulate_wistle_results(img_to_whistles,valid_gt, debug=False):
     }
     for img_id, whistles in img_to_whistles.items():
         res = compare_whistles(**whistles, valid_gt = valid_gt, debug=debug)
-        rprint(f'img_id: {img_id}')
-        rprint(sumerize_whisle_results(res))
+        # rprint(f'img_id: {img_id}')
+        # rprint(sumerize_whisle_results(res))
         accumulated_res['dt_false_pos_all'] += res['dt_false_pos_all']
         accumulated_res['dt_true_pos_all'] += res['dt_true_pos_all']
         accumulated_res['dt_true_pos_valid'] += res['dt_true_pos_valid']
