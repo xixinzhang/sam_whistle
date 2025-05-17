@@ -721,14 +721,14 @@ class TonalTracker:
 
 
 if __name__ == "__main__":
-    stem = 'Qx-Dd-SCI0608-N1-060814-150255' # 5 tonals
+    bin = 'Qx-Dd-SCI0608-N1-060814-150255' # 5 tonals
     # stem = 'Qx-Dd-SCI0608-N1-060816-142812' # 213 tonals
     # stem = 'Qx-Dc-SC03-TAT09-060516-173000'
     # stem = 'QX-Dc-FLIP0610-VLA-061015-165000'
     # stem = 'Qx-Dc-CC0411-TAT11-CH2-041114-154040-s'
-    for stem in ['Qx-Dd-SCI0608-N1-060814-150255']:
+    for bin in ['Qx-Dd-SCI0608-N1-060814-150255']:
         cfg = tyro.cli(TonalConfig)
-        tracker = TonalTracker(cfg, stem)
+        tracker = TonalTracker(cfg, bin)
         # tracker.sam_inference()
         for thre in [9.5, 10]:
             tracker.reset()
