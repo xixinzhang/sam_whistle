@@ -8,6 +8,8 @@ from pathlib import Path
 
 def load_annotation(bin_file:Path)-> list[np.ndarray]:
     """Read the bin file and obtain annotations of each contour"""
+    if isinstance(bin_file, str):
+        bin_file = Path(bin_file)
     data_format = 'dd'  # 2 double-precision [time(s), frequency(Hz)]
     num_dim = 2
     with open(bin_file, 'rb') as f:

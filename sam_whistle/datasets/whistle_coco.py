@@ -8,6 +8,7 @@ import numpy as np
 import pycocotools.mask as maskUtils
 from pycocotools.coco import COCO
 from torchvision.datasets.vision import VisionDataset
+from tqdm import tqdm
 
 
 class WhistleCOCO(VisionDataset):
@@ -165,7 +166,7 @@ class WhistlePatchCOCO(WhistleCOCO):
 
     def _collect_patches(self, image, mask):
         """Split the image and mask into patches."""
-        for y, x in self.patch_topleft:
+        for y, x in tqdm(self.patch_topleft):
             patch = image[y:y + self.patch_size, x:x + self.patch_size]
             mask_patch = mask[y:y + self.patch_size, x:x + self.patch_size]
             self.patches.append(patch)

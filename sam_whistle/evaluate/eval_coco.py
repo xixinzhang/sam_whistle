@@ -1,5 +1,6 @@
 from collections import defaultdict
 from copy import deepcopy
+import glob
 import json
 import os
 from typing import List
@@ -135,7 +136,6 @@ def polygon_to_box(polygon: List[float]):
     y1, y2 = min(y), max(y)
     return [x1, y1, x2 - x1, y2 - y1]  # [x, y, w, h]
 
-
 def poly2mask(poly, height, width):
     """Convert polygon to binary mask."""
     if isinstance(poly, list):
@@ -145,10 +145,12 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
+
+
 def get_detections_record(cfg, model_name, debug=False):
     """Get the detection of each record"""
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
-    stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
+    stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
@@ -158,7 +160,7 @@ def get_detections_record(cfg, model_name, debug=False):
         # stems = ['Qx-Dd-SC03-TAT09-060516-211350']
         stems = stems[:1]
 
-    trackers = {}
+    # trackers = {}
     img_to_whistles = dict()
     scores_all = []
 
@@ -172,7 +174,7 @@ def get_detections_record(cfg, model_name, debug=False):
             tracker.dw_inference()
         else:
             raise ValueError(f"Unknown model name: {model_name}")
-        trackers[stem] = tracker
+        # trackers[stem] = tracker
         tracker.build_graph()
         tracker.get_tonals()
         dt_tonals = tracker.dt_tonals
@@ -227,13 +229,14 @@ def get_detections_record(cfg, model_name, debug=False):
         rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}') if len(scores) > 0 else None
         img_to_whistles[stem] = {
             'gts': tonal_gts,
-            'boudns_gt': bounds_gt,
+            # 'boudns_gt': bounds_gt,
             'dts': tonal_dts,
             # 'scores': np.mean(scores).item(),
             'img_id': stem,
             'w': width,
         }
         scores_all.extend(scores)
+        del tracker
     
     rprint(f'ALL scores: {np.mean(scores_all):.4f}, std: {np.std(scores_all):.4f}, min: {np.min(scores_all):.4f}, max: {np.max(scores_all):.4f}') if len(scores_all) > 0 else None
     sum_gts = sum([len(whistles['gts']) for whistles in img_to_whistles.values()])
@@ -243,20 +246,21 @@ def get_detections_record(cfg, model_name, debug=False):
 
 
 def get_detections_coco(cfg, model_name='sam', debug=False):
-    whistle_coco_data = os.path.join(cfg.root_dir, 'spec_coco/val/data')
-    whistle_coco_label = os.path.join(cfg.root_dir, 'spec_coco/val/labels.json')
+    whistle_coco_data = os.path.join(cfg.root_dir, 'coco/val/data')
+    whistle_coco_label = os.path.join(cfg.root_dir, 'coco/val/labels.json')
 
     test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
     gt_coco = test_set.coco
 
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
-    stems = stems['test'] + stems['train']  # test imgs spread over origin train and test audio
+    stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
+    
     
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
-        stems = ['Qx-Dd-SCI0608-N1-060814-150255']
-        # stems = stems[:1]
-    trackers = {}
+        # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
+        stems = stems[:1]
+    # trackers = {}
 
     bbox_dts = []
     mask_dts = []
@@ -276,7 +280,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
             tracker.dw_inference()
         else:
             raise ValueError(f"Unknown model name: {model_name}")
-        trackers[stem] = tracker
+        # trackers[stem] = tracker
         tracker.build_graph()
         tracker.get_tonals()
         dt_tonals = tracker.dt_tonals
@@ -343,7 +347,8 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
                 mask_dts.append(dt_mask_dict)
         rprint(f'stem:{stem}, scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
         scores_all.extend(scores)
-
+        del tracker
+        
     rprint(f'ALL scores: {np.mean(scores):.4f}, std: {np.std(scores):.4f}, min: {np.min(scores):.4f}, max: {np.max(scores):.4f}')
     # Evaluate metrics
     bbox_coco = gt_coco.loadRes(bbox_dts)
@@ -638,7 +643,11 @@ def mask_to_whistle(mask, method='bresenham'):
     """
     mask = mask.astype(np.uint8)
     skeleton = skeletonize(mask).astype(np.uint8)
-    whistle = np.array(np.nonzero(skeleton)).T # [(y, x]
+    border_mask = np.zeros_like(mask, dtype=bool)
+    border_mask[:, [0, -1]] = True
+    border_pixels = mask & border_mask
+    skeleton = skeleton | border_pixels
+    whistle = np.array(np.nonzero(skeleton)).T # [N x (y, x)]
     whistle = np.flip(whistle, axis=1)  # [(x, y)]
     whistle = np.unique(whistle, axis=0)  # remove duplicate points
     whistle = whistle[whistle[:, 0].argsort()]
@@ -706,16 +715,17 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
 
         gt_whistles = [mask_to_whistle(mask) for mask in gt_masks]
         
-        bounds = []
-        gt_whistles_ = []
-        img_info = coco_gt.imgs[img_id]
-        image = cv2.imread(os.path.join(root_dir,'spec_coco/val/data' , img_info['file_name']))
-        for whistle in gt_whistles:
-            whistle = np.array(whistle)
-            score, bound = get_traj_valid(image[...,0], whistle)
-            bounds.append(bound)
-            gt_whistles_.append(whistle)
-        gt_whistles = gt_whistles_
+        # bounds = []
+        # gt_whistles_ = []
+        # img_info = coco_gt.imgs[img_id]
+        # image = cv2.imread(os.path.join(root_dir,'coco/val/data' , img_info['file_name']))
+        # for whistle in gt_whistles:
+        #     whistle = np.array(whistle)
+        #     score, bound = get_traj_valid(image[...,0], whistle)
+        #     bounds.append(bound)
+        #     gt_whistles_.append(whistle)
+        # gt_whistles = gt_whistles_
+
         dt_whistles = [mask_to_whistle(mask) for mask in dt_masks if mask.sum()>0]
         
         if debug:
@@ -724,7 +734,8 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
         
         img_to_whistles[img['id']] = {
             'gts': gt_whistles,
-            'boudns_gt': bounds,
+            # 'boudns_gt': bounds,
+            # 'boudns_gt': None,
             'dts': dt_whistles,
             'w': w,
             'img_id': img_id,
@@ -735,13 +746,13 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
     return img_to_whistles
 
 
-def compare_whistles(gts, dts, w, img_id, boudns_gt, valid_gt, debug=False):
+def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debug=False):
     """given whistle gt and dt in evaluation unit and get comparison results
     Args:
         gts, dts: N, 2 in format of y, x(or t, f)
     """
     gt_num = len(gts)
-    boudns_gt = np.array(boudns_gt)
+    # boudns_gt = np.array(boudns_gt)
     gt_ranges = np.zeros((gt_num, 2))
     gt_durations = np.zeros(gt_num)
 
@@ -889,6 +900,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt, valid_gt, debug=False):
 
 
 def accumulate_wistle_results(img_to_whistles,valid_gt, debug=False):
+    """accumulate the whistle results for all images (segment or entire audio)"""
     accumulated_res = {
         'dt_false_pos_all': 0,
         'dt_true_pos_all': 0,
@@ -941,11 +953,12 @@ def sumerize_whisle_results(accumulated_res):
     coverage = accumulated_res['all_covered'] / accumulated_res['all_dura'] if accumulated_res['all_dura'] > 0 else 0
 
     summary = {
-        'gt_n':(gt_tp_valid + gt_fn_valid), 
         'precision': precision,
         'recall': recall,
         'frag': frag,
         'coverage': coverage,
+        'gt_n':(gt_tp_valid + gt_fn_valid),
+        'dt_n':(dt_tp_valid + dt_fp),
         'precision_valid': precision_valid,
         'recall_valid': recall_valid,
         'frag_valid': frag_valid,
@@ -954,12 +967,35 @@ def sumerize_whisle_results(accumulated_res):
 
 
 if __name__ == "__main__":
+    # classes = ['bottlenose', 'common', 'melon-headed','spinner']
+    # meta = defaultdict(list)
+    # for s in classes[:2]:
+    #     root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
+    #     bin_files = glob.glob('*.bin', root_dir=root_dir)
+    #     stems = []
+    #     for bin in bin_files:
+    #         gts = utils.load_annotation(os.path.join(root_dir, bin))
+    #         if gts:
+    #             stems.append(bin.replace('.bin', ''))
+    #     meta['test'].extend(stems)
+    # for s in classes[2:]:
+    #     root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
+    #     bin_files = glob.glob('*.bin', root_dir=root_dir)
+    #     stems = []
+    #     for bin in bin_files:
+    #         gts = utils.load_annotation(os.path.join(root_dir, bin))
+    #         if gts:
+    #             stems.append(bin.replace('.bin', ''))
+    #     meta['train'].extend(stems)
+    # print(f"train: {len(meta['train'])}, test: {len(meta['test'])}")
 
+    # with open('data/cross_species/meta.json', 'w') as f:
+    #     json.dump(meta, f, indent=4)
 
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--type", type=str, default="coco")
+    parser.add_argument("--type", type=str, default="record")
     known_args, unknown_args = parser.parse_known_args()
 
     cfg = tyro.cli(Config, args=unknown_args)
@@ -967,19 +1003,26 @@ if __name__ == "__main__":
     # cfg.thre_norm = 0.06939393939393938
     # cfg.thre_norm = 0.05
     if known_args.type == 'coco':
-        # bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
+        bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
         
-        # with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
-        #     pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
+        data_name = cfg.root_dir.split('/')[-1]
 
-        with open(f'outputs/dt_result_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
+        with open(f'outputs/dt_result_{data_name}_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'wb') as f:
+            pickle.dump({'bbox_coco': bbox_dts, 'mask_coco': mask_dts, 'gt_coco': gt_coco}, f)
+
+        with open(f'outputs/dt_result_{data_name}_{known_args.model_name}{'_debug' if known_args.debug else ''}.pkl', 'rb') as f:
             dt_results = pickle.load(f)
             gt_coco = dt_results['gt_coco']
             mask_dts = dt_results['mask_coco']
 
         img_to_whistles = gather_whistles(gt_coco, mask_dts, root_dir=cfg.root_dir, debug=known_args.debug)
-    else:
+    elif known_args.type == 'record':
         img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
+    elif known_args.type == 'coco_record':
+        pass
+    else:
+        raise ValueError(f"Unknown type: {known_args.type}")
+ 
 
     res = accumulate_wistle_results(img_to_whistles, valid_gt=True, debug=known_args.debug)
     summary = sumerize_whisle_results(res)

@@ -60,10 +60,10 @@ def run_sam2_coco(cfg: SAM2Config):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    train_path = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'data')
-    train_ann = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'labels.json')
-    test_path = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'data')
-    test_ann = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'labels.json')
+    train_path = os.path.join(cfg.root_dir,  'train', 'data')
+    train_ann = os.path.join(cfg.root_dir, 'train', 'labels.json')
+    test_path = os.path.join(cfg.root_dir, 'val', 'data')
+    test_ann = os.path.join(cfg.root_dir, 'val', 'labels.json')
     trainset = WhistleCOCO(root=train_path, annFile=train_ann)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
     testset = WhistleCOCO(root=test_path, annFile=test_ann)
@@ -149,10 +149,10 @@ def run_sam_coco(cfg: SAMConfig):
 
     # Load data
     print("#"*30 + " Loading data...."+"#"*30)
-    train_path = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'data')
-    train_ann = os.path.join(cfg.root_dir, 'spec_coco', 'train', 'labels.json')
-    test_path = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'data')
-    test_ann = os.path.join(cfg.root_dir, 'spec_coco', 'val', 'labels.json')
+    train_path = os.path.join(cfg.root_dir, 'train', 'data')
+    train_ann = os.path.join(cfg.root_dir, 'train', 'labels.json')
+    test_path = os.path.join(cfg.root_dir, 'val', 'data')
+    test_ann = os.path.join(cfg.root_dir, 'val', 'labels.json')
     trainset = WhistleCOCO(root=train_path, annFile=train_ann)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
     testset = WhistleCOCO(root=test_path, annFile=test_ann)
