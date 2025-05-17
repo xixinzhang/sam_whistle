@@ -230,9 +230,9 @@ def run_dw_coco(cfg: DWConfig):
     train_ann = os.path.join(cfg.root_dir, 'train', 'labels.json')
     test_path = os.path.join(cfg.root_dir, 'val', 'data')
     test_ann = os.path.join(cfg.root_dir, 'val', 'labels.json')
-    trainset = WhistlePatchCOCO(root=train_path, annFile=train_ann)
+    trainset = WhistlePatchCOCO(root=train_path, annFile=train_ann, train=True)
     trainloader = DataLoader(trainset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, drop_last=True, collate_fn= custom_collate_fn)
-    testset = WhistlePatchCOCO(root=test_path, annFile=test_ann)
+    testset = WhistlePatchCOCO(root=test_path, annFile=test_ann, train=False)
     testloader = DataLoader(testset, batch_size= 1, shuffle=False, num_workers=cfg.num_workers, collate_fn= custom_collate_fn)
     print(f"Train set size: {len(trainset)}, Test set size: {len(testset)}")
     
