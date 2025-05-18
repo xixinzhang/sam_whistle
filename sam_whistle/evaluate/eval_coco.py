@@ -255,7 +255,8 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
-    
+    # stems = stems[:1]
+
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
         # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
@@ -686,7 +687,7 @@ def mask_to_whistle(mask, method='bresenham'):
 
     return unique_whistle
 
-def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, root_dir=None, debug=False):
+def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, root_dir=None, debug=False, model_name='sam'):
     """gather per image whistles from instance masks"""
     
     if debug:
@@ -708,10 +709,13 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
         for i, ann in enumerate(dt_anns):
             score = ann['score']
             mask = coco_dt.annToMask(ann)
-            if score > filter_dt:
+            if model_name == 'sam':
+                if score > filter_dt:
+                    dt_masks.append(mask)
+                else:
+                    continue
+            elif model_name == 'dw':
                 dt_masks.append(mask)
-            else:
-                continue
 
         gt_whistles = [mask_to_whistle(mask) for mask in gt_masks]
         
@@ -995,7 +999,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--type", type=str, default="record")
+    parser.add_argument("--type", type=str, default="coco")
     known_args, unknown_args = parser.parse_known_args()
 
     cfg = tyro.cli(Config, args=unknown_args)
@@ -1015,7 +1019,7 @@ if __name__ == "__main__":
             gt_coco = dt_results['gt_coco']
             mask_dts = dt_results['mask_coco']
 
-        img_to_whistles = gather_whistles(gt_coco, mask_dts, root_dir=cfg.root_dir, debug=known_args.debug)
+        img_to_whistles = gather_whistles(gt_coco, mask_dts, root_dir=cfg.root_dir, debug=known_args.debug, model_name=known_args.model_name)
     elif known_args.type == 'record':
         img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
     elif known_args.type == 'coco_record':
@@ -1026,6 +1030,7 @@ if __name__ == "__main__":
 
     res = accumulate_wistle_results(img_to_whistles, valid_gt=True, debug=known_args.debug)
     summary = sumerize_whisle_results(res)
+    rprint(f'evaluation based on unit {known_args.type}')
     rprint(summary)
 
     

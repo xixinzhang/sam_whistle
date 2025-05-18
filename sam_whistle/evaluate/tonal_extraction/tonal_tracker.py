@@ -251,8 +251,8 @@ class TonalTracker:
         # self.spect_raw = np.flip(utils.normalize_spect(spect_power_db, method=self.cfg.spect_cfg.normalize, min=self.cfg.spect_cfg.fix_min, max= self.cfg.spect_cfg.fix_max), axis=0)
         # self.H, self.W = spect_power_db.shape[-2:]
 
-        self.H = self.crop_top  - self.crop_bottom + 1
-        self.W = spect_power_db.shape[-1]
+        self.H = self.crop_top  - self.crop_bottom + 1  # must be 361
+        self.origin_H, self.W = spect_power_db.shape[-2:]
 
         spect_snr = np.zeros_like(spect_power_db)
         # block_size = self.block_size
@@ -281,6 +281,7 @@ class TonalTracker:
         start_cols = list(range(0, self.W, block_size))
         if self.W - start_cols[-1] < block_size:
             spect_power_db = pad(spect_power_db,  (0, block_size - (self.W - start_cols[-1])))
+        self.pad_W = spect_power_db.shape[-1]
         return start_cols, spect_power_db
 
 
@@ -382,29 +383,37 @@ class TonalTracker:
         patch_size = cfg.spect_cfg.patch_size
         stride = patch_size
         
-        i_starts = torch.arange(0, self.H - patch_size + 1, stride) 
-        j_starts = torch.arange(0, self.W - patch_size + 1, stride)
+        i_starts = torch.arange(0, self.origin_H - patch_size + 1, stride) 
+        j_starts = torch.arange(0, self.pad_W - patch_size + 1, stride)
 
-        if (self.H - patch_size) % stride != 0:
-            i_starts = torch.cat([i_starts, torch.tensor([self.H - patch_size])])
+        if (self.origin_H - patch_size) % stride != 0:
+            i_starts = torch.cat([i_starts, torch.tensor([self.origin_H - patch_size])])
 
-        if (self.W - patch_size) % stride != 0:
-            j_starts = torch.cat([j_starts, torch.tensor([self.W - patch_size])])
+        if (self.pad_W - patch_size) % stride != 0:
+            j_starts = torch.cat([j_starts, torch.tensor([self.pad_W - patch_size])])
 
         i_grid, j_grid = torch.meshgrid(i_starts, j_starts, indexing='ij')
         patch_starts = torch.stack([i_grid.flatten(), j_grid.flatten()], dim=-1)
 
         for i, j in patch_starts:
             patch = spect_map[..., i:i+patch_size, j:j+patch_size]
-            patch = torch.tensor(patch).unsqueeze(0).to(cfg.device).unsqueeze(0) # (1, 1, H, W)
+            patch = patch.unsqueeze(0).to(cfg.device).unsqueeze(0) # (1, 1, H, W)
             pred = model(patch).cpu().numpy().squeeze()
             pred_mask[i:i+patch_size, j:j+patch_size] += pred
             weights[i:i+patch_size, j:j+patch_size] += 1
         
-        pred_mask /= weights            
-        self.spect_map = pred_mask[::-1, :]
+        if (weights ==0).sum() != 0:
+            import pdb
+            pdb.set_trace()
 
+        pred_mask /= weights
+        self.conf_map = pred_mask
 
+        pred_mask = pred_mask[::-1, :]  # prepare for graph search order, top left 0 Hz
+        if self.cfg.spect_cfg.crop:
+            pred_mask = pred_mask[self.crop_bottom : self.crop_top+1]
+        self.spect_map = pred_mask
+       
 
     @torch.no_grad()
     def fcn_spect_inference(self,):
