@@ -5,6 +5,7 @@ import json
 import os
 from typing import List
 import cv2
+from tqdm import tqdm
 import tyro
 import argparse
 import pickle
@@ -152,6 +153,8 @@ def get_detections_record(cfg, model_name, debug=False):
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
+    # stems = stems[:1]
+
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
         # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
@@ -164,6 +167,7 @@ def get_detections_record(cfg, model_name, debug=False):
     img_to_whistles = dict()
     scores_all = []
 
+    rprint(f'Starting to get detections from {stems}')
     for i, stem in enumerate(stems):
         tracker = TonalTracker(cfg, stem)
         if model_name == 'sam':
@@ -246,8 +250,8 @@ def get_detections_record(cfg, model_name, debug=False):
 
 
 def get_detections_coco(cfg, model_name='sam', debug=False):
-    whistle_coco_data = os.path.join(cfg.root_dir, 'coco/val/data')
-    whistle_coco_label = os.path.join(cfg.root_dir, 'coco/val/labels.json')
+    whistle_coco_data = os.path.join(cfg.root_dir, 'coco/test/data')
+    whistle_coco_label = os.path.join(cfg.root_dir, 'coco/test/labels.json')
 
     test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
     gt_coco = test_set.coco
@@ -256,6 +260,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
     # stems = stems[:1]
+    # stems = ['palmyra092007FS192-070924-205305']
 
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
@@ -270,6 +275,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
 
     gt_image_ids = []
     # First, collect all the detection results
+    rprint(f'Starting to get detections from {stems}')
     for stem in stems:
         scores = []
         tracker = TonalTracker(cfg, stem)
@@ -294,6 +300,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
         stem_img_ids = test_set.audio_to_image[stem]
         gt_image_ids.extend(stem_img_ids)
 
+        rprint(f"stem: {stem}, gt_image_ids: {len(stem_img_ids)}")
         for img_id in stem_img_ids:
             data_index = test_set.ids.index(img_id)
             info = test_set[data_index]['info']
@@ -316,7 +323,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
 
             if len(dt_trajs) < 1:
                 continue
-
+            # rprint(f"stem: {stem}, dt_trajs: {len(dt_trajs)}")
             for dt_traj in dt_trajs:
                 traj_pix = tf_to_pix(dt_traj)  # pixel coordinates in 769x1500 low freq at the bottom
                 traj_plg = polyline_to_polygon(traj_pix)
@@ -382,7 +389,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
         coco_eval.accumulate()
         coco_eval.summarize()
 
-    return bbox_coco, mask_coco, gt_coco
+    return bbox_coco, mask_coco, gt_coco, gt_image_ids
 
 
 def get_traj_score(conf_map, traj):
@@ -687,7 +694,7 @@ def mask_to_whistle(mask, method='bresenham'):
 
     return unique_whistle
 
-def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, root_dir=None, debug=False, model_name='sam'):
+def gather_whistles(coco_gt:COCO, coco_dt:COCO, gt_image_ids, filter_dt=0, valid_gt=False, root_dir=None, debug=False, model_name='sam'):
     """gather per image whistles from instance masks"""
     
     if debug:
@@ -696,7 +703,7 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
             ann['score'] = 1.0
 
     img_to_whistles = dict()
-    for img_id in coco_dt.imgs.keys():
+    for img_id in tqdm(gt_image_ids, desc='gathering whistles'):
         img = coco_dt.imgs[img_id]
         h, w = img['height'], img['width']
         dt_anns = coco_dt.imgToAnns[img_id]
@@ -722,7 +729,7 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, filter_dt=0, valid_gt=False, roo
         # bounds = []
         # gt_whistles_ = []
         # img_info = coco_gt.imgs[img_id]
-        # image = cv2.imread(os.path.join(root_dir,'coco/val/data' , img_info['file_name']))
+        # image = cv2.imread(os.path.join(root_dir,'coco/test/data' , img_info['file_name']))
         # for whistle in gt_whistles:
         #     whistle = np.array(whistle)
         #     score, bound = get_traj_valid(image[...,0], whistle)
@@ -903,7 +910,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
     return res
 
 
-def accumulate_wistle_results(img_to_whistles,valid_gt, debug=False):
+def accumulate_wistle_results(img_to_whistles, valid_gt, debug=False):
     """accumulate the whistle results for all images (segment or entire audio)"""
     accumulated_res = {
         'dt_false_pos_all': 0,
@@ -957,6 +964,8 @@ def sumerize_whisle_results(accumulated_res):
     coverage = accumulated_res['all_covered'] / accumulated_res['all_dura'] if accumulated_res['all_dura'] > 0 else 0
 
     summary = {
+        'gt_all': gt_tp + gt_fn,
+        'dt_all': dt_tp + dt_fp,
         'precision': precision,
         'recall': recall,
         'frag': frag,
@@ -1007,7 +1016,7 @@ if __name__ == "__main__":
     # cfg.thre_norm = 0.06939393939393938
     # cfg.thre_norm = 0.05
     if known_args.type == 'coco':
-        bbox_dts, mask_dts, gt_coco = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
+        bbox_dts, mask_dts, gt_coco, gt_image_ids = get_detections_coco(cfg, model_name=known_args.model_name, debug=known_args.debug)
         
         data_name = cfg.root_dir.split('/')[-1]
 
@@ -1019,7 +1028,7 @@ if __name__ == "__main__":
             gt_coco = dt_results['gt_coco']
             mask_dts = dt_results['mask_coco']
 
-        img_to_whistles = gather_whistles(gt_coco, mask_dts, root_dir=cfg.root_dir, debug=known_args.debug, model_name=known_args.model_name)
+        img_to_whistles = gather_whistles(gt_coco, mask_dts, gt_image_ids, root_dir=cfg.root_dir, debug=known_args.debug, model_name=known_args.model_name)
     elif known_args.type == 'record':
         img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
     elif known_args.type == 'coco_record':
