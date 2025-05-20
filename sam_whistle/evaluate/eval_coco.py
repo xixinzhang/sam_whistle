@@ -3,6 +3,7 @@ from copy import deepcopy
 import glob
 import json
 import os
+import time
 from typing import List
 import cv2
 from tqdm import tqdm
@@ -150,10 +151,12 @@ def poly2mask(poly, height, width):
 
 def get_detections_record(cfg, model_name, debug=False):
     """Get the detection of each record"""
+    tic = time.time()
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
     # stems = stems[:1]
+    # stems = ['palmyra092007FS192-070924-205305']
 
     if debug:
         # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
@@ -208,10 +211,7 @@ def get_detections_record(cfg, model_name, debug=False):
         for i, gt_traj in enumerate(gt_tonals):
             traj_pix = tf_to_pix(gt_traj, width=tracker.W)
             traj_pix = unique_pix(traj_pix)
-            try:
-                _, bound = get_traj_valid((tracker.raw_spect*255).numpy().astype(np.uint8), traj_pix)
-            except:
-                import pdb; pdb.set_trace()
+            _, bound = get_traj_valid((tracker.raw_spect*255).numpy().astype(np.uint8), traj_pix)
             tonal_gts.append(traj_pix)
             bounds_gt.append(bound)
 
@@ -246,6 +246,9 @@ def get_detections_record(cfg, model_name, debug=False):
     sum_gts = sum([len(whistles['gts']) for whistles in img_to_whistles.values()])
     sum_dts = sum([len(whistles['dts']) for whistles in img_to_whistles.values()])
     rprint(f'gathered gts: {sum_gts}, dts: {sum_dts}')
+    
+    tok = time.time() - tic
+    rprint(f'Finished gathering detections in {tok:.2f} seconds')
     return img_to_whistles
 
 
@@ -757,7 +760,7 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, gt_image_ids, filter_dt=0, valid
     return img_to_whistles
 
 
-def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debug=False):
+def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, valid_len = 150, deviation_tolerence = 350/125,  debug=False):
     """given whistle gt and dt in evaluation unit and get comparison results
     Args:
         gts, dts: N, 2 in format of y, x(or t, f)
@@ -776,10 +779,15 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
         #    assert (gts[i]== dts[i]).all(), f"gt and dt should not be the same {len(gts)} vs {len(dts)}"
         pass
 
+    if type(valid_len) == int:
+        delt= 1
+    else:
+        delt = 0.002
+
     for gt_idx, gt in enumerate(gts):
         gt_start_x = max(0, gt[:, 0].min())
-        gt_end_x = min(w -1 , gt[:, 0].max())
-        gt_dura = gt_end_x + 1 - gt_start_x  # add 1 in pixel
+        gt_end_x = min(w -delt , gt[:, 0].max())
+        gt_dura = gt_end_x + delt - gt_start_x  # add 1 in pixel
         gt_durations[gt_idx] = gt_dura
         gt_ranges[gt_idx] = (gt_start_x, gt_end_x)
   
@@ -787,7 +795,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
         dt_start_x = max(0, dt[:, 0].min())
         dt_end_x = min(w, dt[:, 0].max())
         dt_ranges[dt_idx] = (dt_start_x, dt_end_x)
-        dt_durations[dt_idx] = dt_end_x + 1 - dt_start_x # add 1 in pixel
+        dt_durations[dt_idx] = dt_end_x + delt - dt_start_x # add 1 in pixel
     
     dt_false_pos_all = list(range(dt_num))
     dt_true_pos_all = []
@@ -825,7 +833,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
 
         valid = True
         if valid_gt:
-            if gt_dura < 75: # or boudns_gt[gt_idx] < 3:
+            if gt_dura < valid_len: # or boudns_gt[gt_idx] < 3:
                 valid= False
         # rprint(f'valid:{valid}, gt_dura: {gt_dura}, boudns_gt: {boudns_gt[gt_idx]}')
 
@@ -840,7 +848,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
             # Note: remove interpolation
             gt_ovlp_ys = gt[:, 1][np.searchsorted(gt[:, 0], dt_ovlp_xs)]
             deviation = np.abs(gt_ovlp_ys - dt_ovlp_ys)
-            deviation_tolerence = 350 / 125
+            deviation_tolerence = deviation_tolerence
             if debug:
                 # deviation_tolerence = 0.1
                 pass
@@ -858,7 +866,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
 
                 # dt_matched_dev.append(deviation)
                 
-                covered += dt_ovlp_xs.max() - dt_ovlp_xs.min() + 1
+                covered += dt_ovlp_xs.max() - dt_ovlp_xs.min() + delt
                 if valid:
                     dt_true_pos_valid.append(ovlp_dt_idx)
 
@@ -910,7 +918,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, debu
     return res
 
 
-def accumulate_wistle_results(img_to_whistles, valid_gt, debug=False):
+def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75, deviation_tolerence = 350/125, debug=False):
     """accumulate the whistle results for all images (segment or entire audio)"""
     accumulated_res = {
         'dt_false_pos_all': 0,
@@ -925,9 +933,9 @@ def accumulate_wistle_results(img_to_whistles, valid_gt, debug=False):
         'all_dura': []
     }
     for img_id, whistles in img_to_whistles.items():
-        res = compare_whistles(**whistles, valid_gt = valid_gt, debug=debug)
-        # rprint(f'img_id: {img_id}')
-        # rprint(sumerize_whisle_results(res))
+        res = compare_whistles(**whistles, valid_gt = valid_gt, valid_len = valid_len, deviation_tolerence = deviation_tolerence,   debug=debug)
+        rprint(f'img_id: {img_id}')
+        rprint(summarize_whistle_results(res))
         accumulated_res['dt_false_pos_all'] += res['dt_false_pos_all']
         accumulated_res['dt_true_pos_all'] += res['dt_true_pos_all']
         accumulated_res['dt_true_pos_valid'] += res['dt_true_pos_valid']
@@ -940,7 +948,7 @@ def accumulate_wistle_results(img_to_whistles, valid_gt, debug=False):
         accumulated_res['all_dura'].extend(res['all_dura'])
     return accumulated_res
 
-def sumerize_whisle_results(accumulated_res):
+def summarize_whistle_results(accumulated_res):
     """sumerize the whistle results"""
     accumulated_res = copy.deepcopy(accumulated_res)
     dt_fp = accumulated_res['dt_false_pos_all']
@@ -980,31 +988,6 @@ def sumerize_whisle_results(accumulated_res):
 
 
 if __name__ == "__main__":
-    # classes = ['bottlenose', 'common', 'melon-headed','spinner']
-    # meta = defaultdict(list)
-    # for s in classes[:2]:
-    #     root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
-    #     bin_files = glob.glob('*.bin', root_dir=root_dir)
-    #     stems = []
-    #     for bin in bin_files:
-    #         gts = utils.load_annotation(os.path.join(root_dir, bin))
-    #         if gts:
-    #             stems.append(bin.replace('.bin', ''))
-    #     meta['test'].extend(stems)
-    # for s in classes[2:]:
-    #     root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
-    #     bin_files = glob.glob('*.bin', root_dir=root_dir)
-    #     stems = []
-    #     for bin in bin_files:
-    #         gts = utils.load_annotation(os.path.join(root_dir, bin))
-    #         if gts:
-    #             stems.append(bin.replace('.bin', ''))
-    #     meta['train'].extend(stems)
-    # print(f"train: {len(meta['train'])}, test: {len(meta['test'])}")
-
-    # with open('data/cross_species/meta.json', 'w') as f:
-    #     json.dump(meta, f, indent=4)
-
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
@@ -1038,7 +1021,7 @@ if __name__ == "__main__":
  
 
     res = accumulate_wistle_results(img_to_whistles, valid_gt=True, debug=known_args.debug)
-    summary = sumerize_whisle_results(res)
+    summary = summarize_whistle_results(res)
     rprint(f'evaluation based on unit {known_args.type}')
     rprint(summary)
 

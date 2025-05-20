@@ -1,10 +1,17 @@
+from collections import defaultdict
+import glob
+import json
+import os
 import struct 
 import numpy as np
 from scipy.interpolate import interp1d, splev, splrep, LSQUnivariateSpline
 from numpy.polynomial import Polynomial
 import cv2
 from skimage.morphology import skeletonize
-from pathlib import Path    
+from pathlib import Path
+from rich import print as rprint
+
+from sam_whistle import utils    
 
 def load_annotation(bin_file:Path)-> list[np.ndarray]:
     """Read the bin file and obtain annotations of each contour"""
@@ -118,6 +125,37 @@ def skeletonize_mask(mask):
     skeleton = skeletonize(mask)
     return skeleton.astype(np.uint8)
 
+def check_annotations():
+    classes = ['bottlenose', 'common', 'melon-headed','spinner']
+    meta = defaultdict(list)
+    for s in classes[:2]:
+        root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
+        bin_files = glob.glob('*.bin', root_dir=root_dir)
+        stems = []
+        for bin in bin_files:
+            gts = utils.load_annotation(os.path.join(root_dir, bin))
+            wavform, sr = utils.load_wave_file(os.path.join(root_dir, bin.replace('.bin', '.wav')))
+            duration = len(wavform) / sr
+            if gts:
+                min_time = np.min([np.min(gt[:, 0]) for gt in gts])
+                max_time = np.max([np.max(gt[:, 0]) for gt in gts])
+                if duration > max_time + 30 or min_time > 30:
+                    rprint(f'{bin}: {min_time}, {max_time}, audio duration: {duration}')
+                stems.append(bin.replace('.bin', ''))
+        meta['test'].extend(stems)
+    # for s in classes[2:]:
+    #     root_dir = os.path.join(os.path.expanduser("~"),f'storage/DCLDE/whale_whistle/{s}')
+    #     bin_files = glob.glob('*.bin', root_dir=root_dir)
+    #     stems = []
+    #     for bin in bin_files:
+    #         gts = utils.load_annotation(os.path.join(root_dir, bin))
+    #         if gts:
+    #             stems.append(bin.replace('.bin', ''))
+    #     meta['train'].extend(stems)
+    # print(f"train: {len(meta['train'])}, test: {len(meta['test'])}")
+
+    # with open('data/cross_species/meta.json', 'w') as f:
+    #     json.dump(meta, f, indent=4)
 
 
 if __name__ == "__main__":
