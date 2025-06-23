@@ -12,6 +12,7 @@ import argparse
 import pickle
 from rich import print as rprint
 import copy
+from dataclasses import dataclass
 
 import numpy as np
 import pycocotools.mask as maskUtils
@@ -147,9 +148,37 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
+def pix_to_tf(pix, height):
+    """Convert pixel coordinates to time-frequency coordinates."""
+    time = (pix[:, 0]-0.5) * 0.002  # Convert to seconds
+    freq = (height - 1 - pix[:, 1] + 0.5) * 125  # Convert to frequency in Hz
+    return np.column_stack((time, freq))
 
 
-def get_detections_record(cfg, model_name, debug=False):
+@dataclass
+class contour:
+    time: float
+    freq: float
+
+def tonnal_save(tonnals, stem, model_name='sam'):
+    """Save the tonnals to a silbido binary file
+    Args:
+        tonnals: list of tonnals array
+        preprcoess to list of dictionaries of tonnals in format
+        {"tfnodes": [
+                {"time": 3.25, "freq": 50.125, "snr": 6.6, "phase": 0.25, "ridge": 1.0},
+                {"time":...},
+                ...,]
+        }
+    """
+    # convert to dataclass
+    tonnals = [contour(time=tonnal[:, 0], freq=tonnal[:, 1]) for tonnal in tonnals]
+
+    from sam_whistle.evaluate.tonal_extraction.write_binary import writeTimeFrequencyBinary
+    writeTimeFrequencyBinary(f'outputs/{stem}_{model_name}_dt.bin', tonnals)
+
+
+def get_detections_record(cfg, model_name, output_bin= False, debug=False):
     """Get the detection of each record"""
     tic = time.time()
     stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
@@ -190,6 +219,8 @@ def get_detections_record(cfg, model_name, debug=False):
         gt_tonals = tracker.gt_tonals
         gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
         rprint(f"stem: {stem}, gt_tonals: {len(gt_tonals)}")
+        if output_bin:
+            tonnal_save(dt_tonals, stem, model_name)
 
         conf_map =tracker.conf_map
         width = conf_map.shape[1]
@@ -992,6 +1023,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--type", type=str, default="coco")
+    parser.add_argument("--output_bin", action="store_true", help="Output bin file")
     known_args, unknown_args = parser.parse_known_args()
 
     cfg = tyro.cli(Config, args=unknown_args)
@@ -1013,7 +1045,7 @@ if __name__ == "__main__":
 
         img_to_whistles = gather_whistles(gt_coco, mask_dts, gt_image_ids, root_dir=cfg.root_dir, debug=known_args.debug, model_name=known_args.model_name)
     elif known_args.type == 'record':
-        img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, debug=known_args.debug)
+        img_to_whistles = get_detections_record(cfg, model_name=known_args.model_name, output_bin= known_args.output_bin, debug=known_args.debug)
     elif known_args.type == 'coco_record':
         pass
     else:
