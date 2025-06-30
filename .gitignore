@@ -9,6 +9,7 @@ logs/*
 !logs/.gitkeep
 outputs/
 silbido*/
+*.png
 
 __pycache__
 *.pth

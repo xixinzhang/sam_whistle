@@ -77,8 +77,8 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
     if visualize:
         print(f"{'#'*30} Visualizing {stem} {'#'*30} to {output_dir}")
         gt_tonals =[]
-        for anno in tracker.gt_tonals_valid:  # gt_tonals, gt_tonals_missed_valid, gt_tonals_valid
-            gt = utils.anno_to_spect_point(anno)
+        for anno in tracker.gt_tonals:  # gt_tonals, gt_tonals_missed_valid, gt_tonals_valid
+            gt = utils.anno_to_spect_point(anno, height = tracker.origin_shape[0])
             gt_tonals.append(gt)
         gt_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, gt_tonals)
         kernel = np.ones((4, 4), np.uint8)
@@ -87,7 +87,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
         
         pred_tonals = []
         for anno in tonals:
-            pred = utils.anno_to_spect_point(anno)
+            pred = utils.anno_to_spect_point(anno, height = tracker.origin_shape[0])
             pred_tonals.append(pred)
         pred_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, pred_tonals)
         pred_tonal_mask = cv2.dilate(pred_tonal_mask, kernel, iterations=1).astype(int)
@@ -101,7 +101,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             pred_tonal_block = pred_tonal_mask[:, col: col + tracker.block_size]
             pred_binary_block = (pred_tonal_block > 0).astype(int)
             block_peaks = [(peak[0], peak[1]- col) for peak in peaks  if peak[1] >= col and peak[1] < col + tracker.block_size]
-            
+            # import pdb; pdb.set_trace()
             utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}', axis=axis)
             utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}', axis=axis)
             utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)

@@ -143,8 +143,12 @@ class TonalTracker:
 
     def _load_gt_tonals(self, stem: str):
         """Load ground truth tonals from annotation file."""
-        bin_file = self.anno_dir/ f'{stem}.bin'
-        gt_tonals = utils.load_annotation(bin_file)
+        try:
+            bin_file = self.anno_dir/ f'{stem}.bin'
+            gt_tonals = utils.load_annotation(bin_file)
+        except FileNotFoundError:
+            print(f'No ground truth tonals found for {stem}, using empty list.')
+            gt_tonals = []
         return gt_tonals
     
     def _get_blocks(self,):
