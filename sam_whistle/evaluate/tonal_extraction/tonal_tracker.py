@@ -25,7 +25,8 @@ def exact_div(x, y):
 
 WINDOW_MS = 8
 HOP_MS = 2
-SAMPLE_RATE = 192_000
+SAMPLE_RATE = 192_000   # common dolphin whistle
+# SAMPLE_RATE = 102_400  # killer whale whistle
 N_FFT = exact_div(SAMPLE_RATE * WINDOW_MS,  1000)  
 HOP_LENGTH = exact_div(SAMPLE_RATE * HOP_MS, 1000)
 
@@ -272,8 +273,12 @@ class TonalTracker:
 
     def _load_gt_tonals(self, stem: str):
         """Load ground truth tonals from annotation file."""
-        bin_file = self.anno_dir/ f'{stem}.bin'
-        gt_tonals = utils.load_annotation(bin_file)
+        try:
+            bin_file = self.anno_dir/ f'{stem}.bin'
+            gt_tonals = utils.load_annotation(bin_file)
+        except FileNotFoundError:
+            print(f'No ground truth tonals found for {stem}.')
+            gt_tonals = []
         return gt_tonals
     
     def _get_blocks(self, spect_power_db):
