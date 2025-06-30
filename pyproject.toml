@@ -22,7 +22,7 @@ dependencies = [
     "tyro>=0.9.2",
     "tensorboard>=2.18.0",
     "prettytable",
-    "jpype",
+    "jpype1",
 ]
 
 [tool.setuptools.packages.find]
