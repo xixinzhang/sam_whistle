@@ -118,7 +118,7 @@ class SpectConfig:
 class Config:
     spect_cfg: SpectConfig
     root_dir: str = 'data/dclde'
-    meta_file: str = 'meta.json'
+    meta_file: str = 'meta.yaml'
     start_s: int = 0
     end_s: float = np.inf
     click_thr_db: float = 10

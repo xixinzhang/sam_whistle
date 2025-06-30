@@ -21,6 +21,7 @@ from pycocotools.coco import COCO
 from shapely.geometry import LineString, Point
 from shapely.ops import clip_by_rect
 from skimage.morphology import skeletonize
+import yaml
 
 
 from sam_whistle.datasets.whistle_coco import WhistleCOCO
@@ -181,7 +182,7 @@ def tonnal_save(tonnals, stem, model_name='sam'):
 def get_detections_record(cfg, model_name, output_bin= False, debug=False):
     """Get the detection of each record"""
     tic = time.time()
-    stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
+    stems = yaml.safe_load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
     # stems = stems[:1]
@@ -290,7 +291,7 @@ def get_detections_coco(cfg, model_name='sam', debug=False):
     test_set = WhistleCOCO(root=whistle_coco_data, annFile=whistle_coco_label)
     gt_coco = test_set.coco
 
-    stems = json.load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
+    stems = yaml.safe_load(open(os.path.join(cfg.root_dir, cfg.meta_file)))
     stems = stems['test'] #+ stems['train']  # test imgs spread over origin train and test audio
     
     # stems = stems[:1]
