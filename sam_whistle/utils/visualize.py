@@ -277,6 +277,7 @@ def visualize_array(
     label_size=12,
     cmap="viridis",
     dpi=100,
+    fmt="png",
 ):
     """Visualizes an array (PyTorch tensor, NumPy array) with optional overlays (points, lines, shapes).
 
@@ -417,7 +418,7 @@ def visualize_array(
     )
 
     if filename is not None and save_dir is not None:
-        save_path = f"{save_dir}/{filename}.svg"
+        save_path = f"{save_dir}/{filename}.{fmt}"
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         fig.savefig(save_path, dpi=dpi)

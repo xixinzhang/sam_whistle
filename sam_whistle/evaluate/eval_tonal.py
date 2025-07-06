@@ -37,8 +37,8 @@ def res_to_metric(res: TonalResults):
     precision_all = res.dt_true_pos_all / (res.dt_true_pos_all + res.dt_false_pos_all + 1e-8)
     gt_num = res.gt_matched_valid + res.gt_missed_valid
     gt_num_all = res.gt_matched_all + res.gt_missed_all
-    recall_valid = res.gt_matched_valid / gt_num
-    recall_all = res.gt_matched_all / gt_num_all
+    recall_valid = res.gt_matched_valid / (gt_num + 1e-8)
+    recall_all = res.gt_matched_all / (gt_num_all + 1e-8)
     dev_mean = np.mean(res.all_deviation)
     dev_std = np.std(res.all_deviation)
     coverage = np.array(res.all_covered_s) / np.array(res.all_dura)
@@ -67,6 +67,33 @@ def res_to_metric(res: TonalResults):
     )
     return stats
 
+@dataclass
+class contour:
+    time: float
+    freq: float
+
+def tonal_save(stem, tonals, tonals_snr=None, model_name = 'mask2former'):
+    """Save the tonnals to a silbido binary file
+    Args:
+        tonnals: list of tonnals array
+        preprcoess to list of dictionaries of tonnals in format
+        {"tfnodes": [
+                {"time": 3.25, "freq": 50.125, "snr": 6.6, "phase": 0.25, "ridge": 1.0},
+                {"time":...},
+                ...,]
+        }
+    """
+    # convert to dataclass
+    filename = f'outputs/{stem}_{model_name}_dt.bin'
+    from sam_whistle.utils.write_binary import writeTimeFrequencyBinary, writeContoursBinary
+    if tonals_snr is None:
+        tonals_ = [contour(time=tonal[:, 0], freq=tonal[:, 1]) for tonal in tonals]
+        writeTimeFrequencyBinary(filename, tonals_)
+    else:
+        tonals_ = [{'tfnodes': [{'time': tf[0], 'freq': tf[1], 'snr': snr} for tf, snr in zip(tfs, snrs)]} for tfs, snrs in zip(tonals, tonals_snr)]
+        writeContoursBinary(filename, tonals_, snr=True)
+
+
 def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None, stem=None, axis=False):
     tracker.reset()
     tracker.thre = thre
@@ -76,6 +103,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
 
     if visualize:
         print(f"{'#'*30} Visualizing {stem} {'#'*30} to {output_dir}")
+        tonal_save(stem, tonals, None, model_name='sam')
         gt_tonals =[]
         for anno in tracker.gt_tonals:  # gt_tonals, gt_tonals_missed_valid, gt_tonals_valid
             gt = utils.anno_to_spect_point(anno, height = tracker.origin_shape[0])
@@ -104,9 +132,9 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             # import pdb; pdb.set_trace()
             utils.plot_spect(raw_block, filename=f'{col}_1.raw', save_dir=f'{output_dir}/{stem}', axis=axis)
             utils.plot_mask_over_spect(raw_block, pred_mask, filename=f'{col}_4.pred_conf', save_dir=f'{output_dir}/{stem}', axis=axis)
-            utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)
+            # utils.plot_mask_over_spect(raw_block, gt_tonal_block, filename=f'{col}_3.gt_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)
             utils.plot_mask_over_spect(raw_block, pred_tonal_block, filename=f'{col}_2.pred_tonal', save_dir=f'{output_dir}/{stem}', random_colors=True, axis=axis)
-            utils.plot_binary_mask(pred_binary_block, filename=f'{col}_7.pred_mask', save_dir=f'{output_dir}/{stem}', axis=axis)
+            # utils.plot_binary_mask(pred_binary_block, filename=f'{col}_7.pred_mask', save_dir=f'{output_dir}/{stem}', axis=axis)
 
             # if len(block_peaks) > 0:
             #     utils.plot_points_over_spect(raw_block, [block_peaks], filename=f'{col}_5.peaks', save_dir=f'{output_dir}/{stem}')

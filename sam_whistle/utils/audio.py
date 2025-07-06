@@ -21,12 +21,12 @@ def wave_to_spect(waveform, sample_rate=None, frame_ms=None, hop_ms=None, pad=0,
     # fft params
     if n_fft is None:
         if frame_ms is not None and sample_rate is not None:
-            n_fft = int(frame_ms * sample_rate / 1000)
+            n_fft = round(frame_ms * sample_rate / 1000)
         else:
             raise ValueError("n_fft or frame_ms must be provided.")
     if hop_length is None:
         if hop_ms is not None and sample_rate is not None:
-            hop_length = int(hop_ms * sample_rate / 1000)
+            hop_length = round(hop_ms * sample_rate / 1000)
         else:
             raise ValueError("hop_length or hop_ms must be provided.")
 

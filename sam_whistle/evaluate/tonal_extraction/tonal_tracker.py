@@ -119,7 +119,8 @@ class TonalTracker:
         
         # to match the marie's implementation, set the center to False
         spect_power_db= utils.wave_to_spect(waveform, sample_rate, **vars(self.cfg.spect_cfg))# (freq, time)
-        
+        self.hop_s = round(self.cfg.spect_cfg.hop_ms * sample_rate / 1000)/sample_rate
+
         self.origin_shape = spect_power_db.shape
         if self.cfg.spect_cfg.crop:
             spect_power_db = spect_power_db[self.cfg.spect_cfg.crop_bottom: self.cfg.spect_cfg.crop_top+1]
