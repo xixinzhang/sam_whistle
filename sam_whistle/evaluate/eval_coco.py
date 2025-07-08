@@ -189,12 +189,8 @@ def get_detections_record(cfg, model_name, output_bin= False, debug=False):
     # stems = ['palmyra092007FS192-070924-205305']
 
     if debug:
-        # stems = ['Qx-Tt-SCI0608-N1-060814-123433']
-        # stems = ['Qx-Dd-SCI0608-N1-060814-150255']
         # stems = ['Qx-Dc-CC0411-TAT11-CH2-041114-154040-s']
-        # stems=['Qx-Dc-SC03-TAT09-060516-171606']
-        # stems = ['Qx-Dd-SC03-TAT09-060516-211350']
-        stems = stems[:1]
+        pass
 
     # trackers = {}
     img_to_whistles = dict()
@@ -924,7 +920,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
             gt_deviation = np.mean(deviations)
             all_deviation.append(gt_deviation) 
             all_covered.append(covered)
-            all_dura.append(gt_dura)
+        all_dura.append(gt_dura) # move out from matched
 
     if debug:
         # if dt_false_pos_all:

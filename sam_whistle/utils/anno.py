@@ -11,7 +11,8 @@ from skimage.morphology import skeletonize
 from pathlib import Path
 from rich import print as rprint
 
-from sam_whistle import utils    
+from sam_whistle import utils
+from sam_whistle.evaluate.tonal_extraction.read_bin import tonalReader
 
 def load_annotation(bin_file:Path)-> list[np.ndarray]:
     """Read the bin file and obtain annotations of each contour"""
@@ -42,6 +43,43 @@ def load_annotation(bin_file:Path)-> list[np.ndarray]:
                 break
         print(f'Loaded {len(annos)} annotated whistles from {bin_file.stem}.bin')
         return annos  #[(time(s), frequency(Hz)),...]
+
+def load_tonal_reader(bin_file: Path)-> list[np.ndarray]:
+    """Load tonal annotations from a .ann file using the tonalReader class.
+
+    Args:
+        bin_file: Path to the .ann file
+
+    Returns:
+        List of tonal annotations
+    """
+    reader = tonalReader(bin_file)
+    contours = reader.getTimeFrequencyContours()
+    annos = []
+    num_dim=2
+    for i, data in enumerate(contours):
+        data = np.array(data).reshape(-1, num_dim)
+        data = get_dense_annotation(data)  # make the contour continuous
+        annos.append(data)
+    print(f"Loaded {len(contours)} annotated whistles from {os.path.basename(bin_file)}")
+    return annos  # [(time(s), frequency(Hz)),...]
+
+def get_dense_annotation(traj: np.ndarray, dense_factor: int = 10):
+    """Get dense annotation from the trajectory to make it continuous and fill the gaps.
+
+    Args:
+        traj: trajectory of the contour  [(time(s), frequency(Hz))]: (num_points, 2)
+    """
+    time = traj[:, 0]
+    sorted_idx = np.argsort(time)
+    time = time[sorted_idx]
+    freq = traj[:, 1][sorted_idx]
+    length = len(time)
+
+    start, end = time[0], time[-1]
+    new_time = np.linspace(start, end, length * dense_factor, endpoint=True)
+    new_freq = np.interp(new_time, time, freq)
+    return np.stack([new_time, new_freq], axis=-1)
 
 def anno_to_spect_point(anno, height = 769, hop_ms = 2, freq_bin = 125):
     """Convert annotation to spectrogram point

@@ -178,7 +178,7 @@ class TonalTracker:
         self.freq_bin = self.spect_cfg.freq_bin
         # spectrogram and GT tonals
         self.audio_dir = Path(cfg.root_dir) / 'audio'
-        self.anno_dir = Path(cfg.root_dir) / 'anno'
+        self.anno_dir = Path(cfg.root_dir) / 'anno_refined'
         self.hop_s = self.spect_cfg.hop_ms / 1000
         self.block_size = self.cfg.spect_cfg.block_size
         self.spect_map, self.spect_snr = self._load_spectrogram(stem)  # [H, W]
@@ -275,9 +275,9 @@ class TonalTracker:
         """Load ground truth tonals from annotation file."""
         try:
             bin_file = self.anno_dir/ f'{stem}.bin'
-            gt_tonals = utils.load_annotation(bin_file)
+            gt_tonals = utils.load_tonal_reader(bin_file)
         except FileNotFoundError:
-            print(f'No ground truth tonals found for {stem}.')
+            print(f'No ground truth tonals found from {bin_file}.')
             gt_tonals = []
         return gt_tonals
     
