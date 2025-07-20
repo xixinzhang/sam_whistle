@@ -6,6 +6,8 @@ import os
 import time
 from typing import List
 import cv2
+import librosa
+from scipy.signal import medfilt2d
 from tqdm import tqdm
 import tyro
 import argparse
@@ -26,6 +28,7 @@ import yaml
 
 from sam_whistle.datasets.whistle_coco import WhistleCOCO
 from sam_whistle.evaluate.tonal_extraction.tonal_tracker import *
+from sam_whistle.evaluate.tonal_extraction.write_binary import writeTimeFrequencyBinary, writeContoursBinary
 
 
 def get_dense_annotation(traj: np.ndarray, dense_factor: int = 10):
@@ -149,7 +152,7 @@ def poly2mask(poly, height, width):
     mask = maskUtils.decode(rle)
     return mask
 
-def pix_to_tf(pix, height):
+def pix_to_tf(pix, height = 769):
     """Convert pixel coordinates to time-frequency coordinates."""
     time = (pix[:, 0]-0.5) * 0.002  # Convert to seconds
     freq = (height - 1 - pix[:, 1] + 0.5) * 125  # Convert to frequency in Hz
@@ -161,7 +164,7 @@ class contour:
     time: float
     freq: float
 
-def tonnal_save(tonnals, stem, model_name='sam'):
+def tonal_save(stem, tonals, tonals_snr=None, model_name = 'mask2former'):
     """Save the tonnals to a silbido binary file
     Args:
         tonnals: list of tonnals array
@@ -173,10 +176,13 @@ def tonnal_save(tonnals, stem, model_name='sam'):
         }
     """
     # convert to dataclass
-    tonnals = [contour(time=tonnal[:, 0], freq=tonnal[:, 1]) for tonnal in tonnals]
-
-    from sam_whistle.evaluate.tonal_extraction.write_binary import writeTimeFrequencyBinary
-    writeTimeFrequencyBinary(f'outputs/{stem}_{model_name}_dt.bin', tonnals)
+    filename = f'outputs/{stem}_{model_name}_dt.bin'
+    if tonals_snr is None:
+        tonals_ = [contour(time=tonal[:, 0], freq=tonal[:, 1]) for tonal in tonals]
+        writeTimeFrequencyBinary(filename, tonals_)
+    else:
+        tonals_ = [{'tfnodes': [{'time': tf[0], 'freq': tf[1], 'snr': snr} for tf, snr in zip(tfs, snrs)]} for tfs, snrs in zip(tonals, tonals_snr)]
+        writeContoursBinary(filename, tonals_, snr=True)
 
 
 def get_detections_record(cfg, model_name, output_bin= False, debug=False):
@@ -189,7 +195,7 @@ def get_detections_record(cfg, model_name, output_bin= False, debug=False):
     # stems = ['palmyra092007FS192-070924-205305']
 
     if debug:
-        # stems = ['Qx-Dc-CC0411-TAT11-CH2-041114-154040-s']
+        stems = ['Qx-Tt-SCI0608-N1-060814-121518']
         pass
 
     # trackers = {}
@@ -217,7 +223,7 @@ def get_detections_record(cfg, model_name, output_bin= False, debug=False):
         gt_tonals = [get_dense_annotation(traj) for traj in gt_tonals]
         rprint(f"stem: {stem}, gt_tonals: {len(gt_tonals)}")
         if output_bin:
-            tonnal_save(dt_tonals, stem, model_name)
+            tonal_save(stem, dt_tonals, model_name=model_name)
 
         conf_map =tracker.conf_map
         width = conf_map.shape[1]
@@ -443,288 +449,6 @@ def get_traj_valid(conf_map, traj):
         raise ValueError("No valid points in the trajectory")
 
 
-def bresenham_line(p1, p2):
-    """
-    Implements Bresenham's line algorithm for grid-aligned paths.
-    This creates the most direct path between two points while staying on the grid.
-    
-    Args:
-        p1: Starting point (x1, y1)
-        p2: Ending point (x2, y2)
-        
-    Returns:
-        List of points [(x1,y1), ..., (x2,y2)] forming a continuous path
-    """
-    x1, y1 = p1
-    x2, y2 = p2
-    
-    # Initialize the path with the starting point
-    path = []
-    
-    dx = abs(x2 - x1)
-    dy = abs(y2 - y1)
-    sx = 1 if x1 < x2 else -1
-    sy = 1 if y1 < y2 else -1
-    err = dx - dy
-    
-    while True:
-        path.append((x1, y1))
-        
-        if x1 == x2 and y1 == y2:
-            break
-            
-        e2 = 2 * err
-        if e2 > -dy:
-            err -= dy
-            x1 += sx
-        if e2 < dx:
-            err += dx
-            y1 += sy
-    
-    return path
-
-
-def midpoint_interpolation(p1, p2):
-    """
-    Recursively creates a path by adding midpoints between points.
-    
-    Args:
-        p1: Starting point (x1, y1)
-        p2: Ending point (x2, y2)
-        
-    Returns:
-        List of points forming a continuous path
-    """
-    x1, y1 = p1
-    x2, y2 = p2
-    
-    # Base case: points are adjacent or the same
-    if abs(x2 - x1) <= 1 and abs(y2 - y1) <= 1:
-        return [p1, p2]
-    
-    # Find the midpoint (rounded to integers)
-    mid_x = (x1 + x2) // 2
-    mid_y = (y1 + y2) // 2
-    midpoint = (mid_x, mid_y)
-    
-    # Recursively find paths for each half
-    first_half = midpoint_interpolation(p1, midpoint)
-    second_half = midpoint_interpolation(midpoint, p2)
-    
-    # Combine the paths (avoid duplicating the midpoint)
-    return first_half[:-1] + second_half
-
-
-def simple_weighted_path(points, i, window=2):
-    """
-    A simpler weighted path method that doesn't use BFS.
-    Uses direct interpolation with local direction awareness.
-    
-    Args:
-        points: All trajectory points
-        i: Current index
-        window: Number of points to consider on each side
-        
-    Returns:
-        List of points forming a continuous path
-    """
-    # Ensure all points are tuples
-    points = [tuple(p) for p in points]
-    current = points[i]
-    next_point = points[i + 1]
-    
-    # If points are close, use Bresenham's algorithm
-    if abs(next_point[0] - current[0]) <= 3 and abs(next_point[1] - current[1]) <= 3:
-        return bresenham_line(current, next_point)
-    
-    # Get neighboring points within window
-    start_idx = max(0, i - window)
-    end_idx = min(len(points) - 1, i + 1 + window)
-    neighbors = points[start_idx:end_idx + 1]
-    
-    # Simple weighted path based on direction awareness
-    if len(neighbors) <= 2:
-        return bresenham_line(current, next_point)
-    
-    # Calculate primary direction from neighbors
-    x_coords = [p[0] for p in neighbors]
-    y_coords = [p[1] for p in neighbors]
-    
-    # Simple linear trend (direction)
-    if len(neighbors) >= 3:
-        x_diffs = [x_coords[j+1] - x_coords[j] for j in range(len(x_coords)-1)]
-        y_diffs = [y_coords[j+1] - y_coords[j] for j in range(len(y_coords)-1)]
-        avg_x_diff = sum(x_diffs) / len(x_diffs)
-        avg_y_diff = sum(y_diffs) / len(y_diffs)
-    else:
-        avg_x_diff = next_point[0] - current[0]
-        avg_y_diff = next_point[1] - current[1]
-    
-    # Create a path with awareness of the typical step size
-    path = [current]
-    
-    # Current position
-    cx, cy = current
-    tx, ty = next_point
-    
-    # Step sizes (make them integers between 1-3 based on average direction)
-    step_x = max(1, min(3, int(abs(avg_x_diff)) or 1)) * (1 if tx > cx else -1 if tx < cx else 0)
-    step_y = max(1, min(3, int(abs(avg_y_diff)) or 1)) * (1 if ty > cy else -1 if ty < cy else 0)
-    
-    # We'll adjust step_x and step_y to ensure we don't overshoot
-    while (cx, cy) != next_point:
-        # Decide which direction to move
-        if abs(cx - tx) > abs(cy - ty):
-            # Move in x direction
-            new_cx = cx + step_x
-            # Check if we'd overshoot
-            if (step_x > 0 and new_cx > tx) or (step_x < 0 and new_cx < tx):
-                new_cx = tx
-            cx = new_cx
-        else:
-            # Move in y direction
-            new_cy = cy + step_y
-            # Check if we'd overshoot
-            if (step_y > 0 and new_cy > ty) or (step_y < 0 and new_cy < ty):
-                new_cy = ty
-            cy = new_cy
-        
-        # Add new point to path
-        new_point = (cx, cy)
-        
-        # Check if we need to fill gaps (ensure path is grid-continuous)
-        last_point = path[-1]
-        if abs(new_point[0] - last_point[0]) > 1 or abs(new_point[1] - last_point[1]) > 1:
-            # Fill gap with Bresenham
-            gap_filler = bresenham_line(last_point, new_point)
-            path.extend(gap_filler[1:])
-        else:
-            path.append(new_point)
-    
-    return path
-
-
-def bezier_grid_path(points, start_idx, end_idx, steps=10):
-    """
-    Creates a Bezier curve between points and snaps it to grid.
-    
-    Args:
-        points: All trajectory points
-        start_idx: Index of starting point
-        end_idx: Index of ending point
-        steps: Number of interpolation steps
-        
-    Returns:
-        List of grid points approximating a Bezier curve
-    """
-    # Extract points
-    p0 = points[start_idx]
-    p3 = points[end_idx]
-    
-    # Use neighboring points to determine control points if available
-    if start_idx > 0 and end_idx < len(points) - 1:
-        # Control points based on neighboring points
-        prev = points[start_idx - 1]
-        next_point = points[end_idx + 1]
-        
-        # Create control points by extending the lines from neighbors
-        dx1 = p0[0] - prev[0]
-        dy1 = p0[1] - prev[1]
-        p1 = (p0[0] + dx1 // 2, p0[1] + dy1 // 2)
-        
-        dx2 = p3[0] - next_point[0]
-        dy2 = p3[1] - next_point[1]
-        p2 = (p3[0] + dx2 // 2, p3[1] + dy2 // 2)
-    else:
-        # Default control points for endpoints
-        dx = p3[0] - p0[0]
-        dy = p3[1] - p0[1]
-        p1 = (p0[0] + dx // 3, p0[1] + dy // 3)
-        p2 = (p0[0] + 2 * dx // 3, p0[1] + 2 * dy // 3)
-    
-    # Generate Bezier curve points
-    curve_points = []
-    for t in np.linspace(0, 1, steps):
-        # Cubic Bezier formula
-        x = (1-t)**3 * p0[0] + 3*(1-t)**2*t * p1[0] + 3*(1-t)*t**2 * p2[0] + t**3 * p3[0]
-        y = (1-t)**3 * p0[1] + 3*(1-t)**2*t * p1[1] + 3*(1-t)*t**2 * p2[1] + t**3 * p3[1]
-        
-        # Round to nearest grid point
-        curve_points.append((round(x), round(y)))
-    
-    # Ensure the path is continuous by filling any gaps
-    grid_path = [p0]
-    for i in range(1, len(curve_points)):
-        prev = grid_path[-1]
-        current = curve_points[i]
-        
-        # If points aren't adjacent, fill the gap with Bresenham
-        if abs(current[0] - prev[0]) > 1 or abs(current[1] - prev[1]) > 1:
-            connecting_points = bresenham_line(prev, current)
-            grid_path.extend(connecting_points[1:])
-        else:
-            grid_path.append(current)
-    
-    # Ensure end point is included
-    if grid_path[-1] != p3:
-        connecting_points = bresenham_line(grid_path[-1], p3)
-        grid_path.extend(connecting_points[1:])
-    
-    return grid_path
-
-def mask_to_whistle(mask, method='bresenham'):
-    """convert the instance mask to whistle contour, use skeleton methods
-    
-    Args
-        mask: instance mask (H, W)
-    Return
-        whistle: (N,2) in pixel coordinates
-    """
-    mask = mask.astype(np.uint8)
-    skeleton = skeletonize(mask).astype(np.uint8)
-    border_mask = np.zeros_like(mask, dtype=bool)
-    border_mask[:, [0, -1]] = True
-    border_pixels = mask & border_mask
-    skeleton = skeleton | border_pixels
-    whistle = np.array(np.nonzero(skeleton)).T # [N x (y, x)]
-    whistle = np.flip(whistle, axis=1)  # [(x, y)]
-    whistle = np.unique(whistle, axis=0)  # remove duplicate points
-    whistle = whistle[whistle[:, 0].argsort()]
-    assert whistle.ndim ==2 and whistle.shape[1] == 2, f"whistle shape: {whistle.shape}"
-
-    # connect fragmented whistle points
-    whistle = whistle.tolist()
-    whistle_ =[whistle[0]]
-    for i in range(len(whistle) - 1):
-        current = whistle[i]
-        next_point = whistle[i + 1]
-        
-        # Generate intermediate points between current and next_point
-        if method == 'bresenham':
-            intermediate_points = bresenham_line(current, next_point)
-        elif method == 'midpoint':
-            intermediate_points = midpoint_interpolation(current, next_point)
-        elif method == 'bezier':
-            intermediate_points = bezier_grid_path(whistle, i, i+1)
-        elif method == 'weighted':
-            intermediate_points = simple_weighted_path(whistle, i)
-        else:
-            raise ValueError(f"Unknown method: {method}")
-        
-        # Add intermediate points to trajectory (skip the first one as it's already included)
-        whistle_.extend(intermediate_points[1:])
-    
-    # Group by x-coordinate and select one y-value per x
-    whistle_ = np.array(whistle_)
-    unique_x = np.unique(whistle_[:, 0])
-    averaged_y = np.zeros_like(unique_x)
-    for i, x in enumerate(unique_x):
-        y_values = whistle_[whistle_[:, 0] == x][:, 1]
-        averaged_y[i] = int(np.round(np.mean(y_values)))
-    unique_whistle = np.column_stack((unique_x, averaged_y))
-
-    return unique_whistle
-
 def gather_whistles(coco_gt:COCO, coco_dt:COCO, gt_image_ids, filter_dt=0, valid_gt=False, root_dir=None, debug=False, model_name='sam'):
     """gather per image whistles from instance masks"""
     
@@ -788,13 +512,79 @@ def gather_whistles(coco_gt:COCO, coco_dt:COCO, gt_image_ids, filter_dt=0, valid
     return img_to_whistles
 
 
-def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, valid_len = 150, deviation_tolerence = 350/125,  debug=False):
+def wave_to_spect(
+        waveform, 
+        sample_rate=None,
+        frame_ms=8, 
+        hop_ms=2, 
+        pad=0, 
+        n_fft=None, 
+        hop_length=None, 
+        top_db=None, 
+        center = False, 
+        amin = 1e-16, 
+        **kwargs
+    ):
+    """Convert waveform to raw spectrogram in power dB scale."""
+    # fft params
+    if n_fft is None:
+        if frame_ms is not None and sample_rate is not None:
+            n_fft = int(frame_ms * sample_rate / 1000)
+        else:
+            raise ValueError("n_fft or frame_ms must be provided.")
+    if hop_length is None:
+        if hop_ms is not None and sample_rate is not None:
+            hop_length = int(hop_ms * sample_rate / 1000)
+        else:
+            raise ValueError("hop_length or hop_ms must be provided.")
+
+    # spectrogram magnitude
+    spect = librosa.stft(
+        waveform,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=n_fft,
+        window='hamming',
+        center=center,
+        pad_mode='reflect',
+    )
+    # decibel scale spectrogram with cutoff specified by top_db
+    spect_power_db = librosa.amplitude_to_db(
+        np.abs(spect),
+        ref=1.0,
+        amin=amin,
+        top_db=top_db,
+    )
+    return spect_power_db # (freq, time)
+
+def load_wave_file(file_path, type='numpy'):
+    """Load one wave file."""
+    if type == 'numpy':
+        waveform, sample_rate = librosa.load(file_path, sr=None)
+    elif type == 'tensor':
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(file_path)
+    return waveform, sample_rate
+
+
+def snr_spect(spect_db, click_thr_db, broadband_thr_n):
+    meanf_db = np.mean(spect_db, axis=1, keepdims=True)
+    click_p = np.sum((spect_db - meanf_db) > click_thr_db, axis=0) > broadband_thr_n
+    use_p = ~click_p
+    spect_db = medfilt2d(spect_db, kernel_size=[3,3])
+    if np.sum(use_p) == 0:
+        # Qx-Dc-SC03-TAT09-060516-173000.wav 4500 no use_p
+        use_p = np.ones_like(click_p)
+    meanf_db = np.mean(spect_db[:, use_p], axis=1, keepdims=True)
+    snr_spect_db = spect_db - meanf_db
+    return snr_spect_db
+
+def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, valid_len = 75, deviation_tolerence = 350/125, debug=False):
     """given whistle gt and dt in evaluation unit and get comparison results
     Args:
         gts, dts: N, 2 in format of y, x(or t, f)
     """
     gt_num = len(gts)
-    # boudns_gt = np.array(boudns_gt)
     gt_ranges = np.zeros((gt_num, 2))
     gt_durations = np.zeros(gt_num)
 
@@ -802,11 +592,6 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
     dt_ranges = np.zeros((dt_num, 2))
     dt_durations = np.zeros(dt_num)
     
-    if debug:
-        # for i in range(dt_num):
-        #    assert (gts[i]== dts[i]).all(), f"gt and dt should not be the same {len(gts)} vs {len(dts)}"
-        pass
-
     if type(valid_len) == int:
         delt= 1
     else:
@@ -836,14 +621,23 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
     all_covered = []
     all_dura = []
 
+    if valid_gt or debug:
+        waveform, sample_rate = load_wave_file(f'data/cross/audio/{img_id}.wav')
+        spect_power_db= wave_to_spect(waveform, sample_rate)
+        H, W = spect_power_db.shape[-2:]
+        spect_snr = np.zeros_like(spect_power_db)
+        block_size = 1500  # 300ms
+        broadband = 0.01
+        search_row = 4
+        ratio_above_snr = 0.3
+        for i in range(0, H, block_size):
+            spect_snr[i:i+block_size] = snr_spect(spect_power_db[i:i+block_size], click_thr_db=10, broadband_thr_n=broadband*H )
+        spect_snr = np.flipud(spect_snr) # flip frequency axis, low freq at the bottom
+
     # go through each ground truth
     for gt_idx, gt in enumerate(gts):
         gt_start_x, gt_end_x = gt_ranges[gt_idx]
         gt_dura = gt_durations[gt_idx]
-
-        # if gt_dura < 2:
-        #     continue
-
         # Note: remove interpolation and snr validation that filter low gt snr level
         # which requires addition input
         dt_start_xs, dt_end_xs = dt_ranges[:, 0], dt_ranges[:, 1]
@@ -854,16 +648,21 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
         matched = False
         deviations = []
         covered = 0
-        # cnt = 0
-        # dt_matched = []
-        # dt_matched_dev = []
         # Note remove duration filter short < 75 pix whistle
-
         valid = True
         if valid_gt:
-            if gt_dura < valid_len: # or boudns_gt[gt_idx] < 3:
+            search_row_low = np.minimum(np.maximum(gt[:, 1] - search_row, 0), H)
+            search_row_high = np.maximum(np.minimum(gt[:, 1] + search_row, H), 0)
+            gt_cols = gt[:, 0][gt[:, 0] < W]
+            try:
+                spec_search = [np.max(spect_snr[l:h, col]).item() for i, (l,h, col) in enumerate(zip(search_row_low, search_row_high, gt_cols))] 
+            except: 
+                import pdb; pdb.set_trace()
+            sorted_search_snr = np.sort(spec_search)
+            bound_idx = max(0, round(len(sorted_search_snr) * (1- ratio_above_snr))-1)
+            gt_snr = sorted_search_snr[bound_idx]
+            if gt_dura < valid_len or gt_snr < 3:
                 valid= False
-        # rprint(f'valid:{valid}, gt_dura: {gt_dura}, boudns_gt: {boudns_gt[gt_idx]}')
 
 
         for ovlp_dt_idx in ovlp_dt_ids:
@@ -877,14 +676,9 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
             gt_ovlp_ys = gt[:, 1][np.searchsorted(gt[:, 0], dt_ovlp_xs)]
             deviation = np.abs(gt_ovlp_ys - dt_ovlp_ys)
             deviation_tolerence = deviation_tolerence
-            if debug:
-                # deviation_tolerence = 0.1
-                pass
             if len(deviation)> 0 and np.mean(deviation) <= deviation_tolerence:
                 matched = True
                 
-                # cnt += 1
-                # dt_matched.append(ovlp_dt_idx)
                 if ovlp_dt_idx in dt_false_pos_all:
                     dt_false_pos_all.remove(ovlp_dt_idx)
                 # TODO: has multiplications
@@ -897,15 +691,6 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
                 covered += dt_ovlp_xs.max() - dt_ovlp_xs.min() + delt
                 if valid:
                     dt_true_pos_valid.append(ovlp_dt_idx)
-
-
-        # if debug and cnt > 1:
-        #     rprint(f"img_id: {img_id}, multiplication gt_id: {gt_idx} cnt: {cnt}")
-        #     rprint(f"gt: {gt.T}",)
-        #     for i, idx in enumerate(dt_matched):
-        #         rprint(f"dt_idx: {idx}")
-        #         rprint(f"dt: {dts[idx].T}")
-        #         print(f"deviation: {dt_matched_dev[i].mean()}")
         
         if matched:
             gt_matched_all.append(gt_idx)
@@ -918,16 +703,23 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
 
         if matched:
             gt_deviation = np.mean(deviations)
-            all_deviation.append(gt_deviation) 
+            all_deviation.append(gt_deviation)
             all_covered.append(covered)
         all_dura.append(gt_dura) # move out from matched
 
     if debug:
-        # if dt_false_pos_all:
-        #     for dt_fp_idx in dt_false_pos_all:
-        #         rprint(f'img_id: {img_id}, dt_id:{dt_fp_idx}, fp_num: {len(dt_false_pos_all)}')
-        #         rprint(f'dt: {dts[dt_fp_idx]}')
-        #         # rprint(f'gt: {gts[dt_fp_idx]}')
+        freq_height = 769
+        dt_false_pos_tf_all = [pix_to_tf(dts[idx], height=freq_height) for idx in dt_false_pos_all]
+        tonals_snr = [spect_snr[dts[idx][:, 1].astype(int),dts[idx][:, 0].astype(int)] for idx in dt_false_pos_all]
+        tonal_save(img_id, dt_false_pos_tf_all, tonals_snr, 'mask2former_swin_fp')
+        dt_snrs = [np.mean(snr) for snr in tonals_snr]
+
+        dt_false_neg_tf = [pix_to_tf(gts[idx], height=freq_height) for idx in gt_missed_all]
+        tonal_save(img_id, dt_false_neg_tf, model_name='mask2former_swin_fn')
+
+        if len(dt_snrs) > 0:
+            # rprint({i+1: dt_snrs[i].item() for i in range(len(dt_snrs))})
+            rprint(f'stem: {img_id}, min_snr: {np.min(dt_snrs)}, max_snr: {np.max(dt_snrs)}, mean:{np.mean(dt_snrs)}, above 9: {np.sum(np.array(dt_snrs) > 9)}')
         pass
                 
     res = {
@@ -946,7 +738,7 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
     return res
 
 
-def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75, deviation_tolerence = 350/125, debug=False):
+def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75,deviation_tolerence = 350/125, debug=False):
     """accumulate the whistle results for all images (segment or entire audio)"""
     accumulated_res = {
         'dt_false_pos_all': 0,
@@ -961,7 +753,7 @@ def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75, deviation
         'all_dura': []
     }
     for img_id, whistles in img_to_whistles.items():
-        res = compare_whistles(**whistles, valid_gt = valid_gt, valid_len = valid_len, deviation_tolerence = deviation_tolerence,   debug=debug)
+        res = compare_whistles(**whistles, valid_gt = valid_gt, valid_len = valid_len, deviation_tolerence = deviation_tolerence, debug=debug)
         rprint(f'img_id: {img_id}')
         rprint(summarize_whistle_results(res))
         accumulated_res['dt_false_pos_all'] += res['dt_false_pos_all']
@@ -1004,6 +796,7 @@ def summarize_whistle_results(accumulated_res):
         'dt_all': dt_tp + dt_fp,
         'precision': precision,
         'recall': recall,
+        'f1': 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0,
         'frag': frag,
         'coverage': coverage,
         'gt_n':(gt_tp_valid + gt_fn_valid),
@@ -1011,6 +804,7 @@ def summarize_whistle_results(accumulated_res):
         'precision_valid': precision_valid,
         'recall_valid': recall_valid,
         'frag_valid': frag_valid,
+        'f1_valid': 2 * precision_valid * recall_valid / (precision_valid + recall_valid) if (precision_valid + recall_valid) > 0 else 0
     }
     return summary
 
