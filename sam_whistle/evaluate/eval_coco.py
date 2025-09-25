@@ -252,7 +252,9 @@ def get_detections_record(cfg, model_name, output_bin= False, debug=False):
             gt_traj_plg = polyline_to_polygon(traj_pix, n_frames=width)
             plgs.append(gt_traj_plg)
             
-
+        tonal_gts = cut_whistle_outrange(tonal_gts)
+        tonal_gts = filter_whistles(tonal_gts)
+        
         # if debug:
         #     dt_tonals = deepcopy(gt_tonals)
         #     conf_map = poly2mask(plgs, *conf_map.shape)
@@ -284,6 +286,52 @@ def get_detections_record(cfg, model_name, output_bin= False, debug=False):
     tok = time.time() - tic
     rprint(f'Finished gathering detections in {tok:.2f} seconds')
     return img_to_whistles
+
+def cut_whistle_outrange(whistles, 
+                        top_cutoff = 368, # (96000-50000)/125
+                        bottom_cutoff = 729 # 769 - 5000/125
+            ):
+    """Cut whistles that are out of range."""
+    filtered_whistles = []
+    for whistle in whistles:
+        # Find points that are below the top_cutoff (points below top_cutoff are valid)
+        try:
+            valid_indices = (whistle[:, 1] > top_cutoff) & (whistle[:, 1] < bottom_cutoff)
+        except:
+            import pdb; pdb.set_trace()
+        # If no valid points, skip this whistle entirely
+        if not np.any(valid_indices):
+            continue
+        
+        # Find continuous segments above the cutoff
+        segments = []
+        current_segment = []
+        for i, (point, is_valid) in enumerate(zip(whistle, valid_indices)):
+            if is_valid:
+                current_segment.append(point)
+            elif current_segment:  # End of a valid segment
+                segments.append(np.array(current_segment))
+                current_segment = []
+                    
+        # the last segment if it exists
+        if current_segment:
+            segments.append(np.array(current_segment))
+        
+        # Add all valid segments to our filtered list
+        filtered_whistles.extend(segments)
+    return filtered_whistles
+
+def filter_whistles(whistles, length_thre=10):
+    """Filter whistles based on length and frequency range."""
+    filtered_whistles = []
+    for whistle in whistles:
+        freq_range = whistle[-1].max() - whistle[0].min()
+        # Check if the whistle has enough unique x-coordinates
+        if len(whistle) < length_thre or freq_range < length_thre:
+            continue
+        else:
+            filtered_whistles.append(whistle)
+    return filtered_whistles
 
 
 def get_detections_coco(cfg, model_name='sam', debug=False):
@@ -620,6 +668,8 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
     all_deviation = []
     all_covered = []
     all_dura = []
+    valid_covered = []
+    valid_dura = []
 
     if valid_gt or debug:
         waveform, sample_rate = load_wave_file(f'data/cross/audio/{img_id}.wav')
@@ -694,18 +744,20 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
         
         if matched:
             gt_matched_all.append(gt_idx)
+            gt_deviation = np.mean(deviations)
+            all_deviation.append(gt_deviation)
+            all_covered.append(covered)
             if valid:
                 gt_matched_valid.append(gt_idx)
+                valid_covered.append(covered)
         else:
             gt_missed_all.append(gt_idx)
             if valid:
                 gt_missed_valid.append(gt_idx)
 
-        if matched:
-            gt_deviation = np.mean(deviations)
-            all_deviation.append(gt_deviation)
-            all_covered.append(covered)
         all_dura.append(gt_dura) # move out from matched
+        if valid:
+            valid_dura.append(gt_dura)
 
     if debug:
         freq_height = 769
@@ -733,7 +785,9 @@ def compare_whistles(gts, dts, w, img_id, boudns_gt=None, valid_gt = False, vali
         'gt_missed_valid': len(gt_missed_valid),
         'all_deviation': all_deviation,
         'all_covered': all_covered,
-        'all_dura': all_dura
+        'all_dura': all_dura,
+        'valid_covered': valid_covered,
+        'valid_dura': valid_dura
     }
     return res
 
@@ -750,7 +804,9 @@ def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75,deviation_
         'gt_missed_valid': 0,
         'all_deviation': [],
         'all_covered': [],
-        'all_dura': []
+        'all_dura': [],
+        'valid_covered': [],
+        'valid_dura': []
     }
     for img_id, whistles in img_to_whistles.items():
         res = compare_whistles(**whistles, valid_gt = valid_gt, valid_len = valid_len, deviation_tolerence = deviation_tolerence, debug=debug)
@@ -766,6 +822,8 @@ def accumulate_wistle_results(img_to_whistles, valid_gt, valid_len=75,deviation_
         accumulated_res['all_deviation'].extend(res['all_deviation'])
         accumulated_res['all_covered'].extend(res['all_covered'])
         accumulated_res['all_dura'].extend(res['all_dura'])
+        accumulated_res['valid_covered'].extend(res['valid_covered'])
+        accumulated_res['valid_dura'].extend(res['valid_dura'])
     return accumulated_res
 
 def summarize_whistle_results(accumulated_res):
@@ -789,7 +847,10 @@ def summarize_whistle_results(accumulated_res):
     accumulated_res['all_deviation'] = np.mean(accumulated_res['all_deviation']).item()
     accumulated_res['all_covered'] = np.sum(accumulated_res['all_covered']).item()
     accumulated_res['all_dura'] = np.sum(accumulated_res['all_dura']).item()
+    accumulated_res['valid_covered'] = np.sum(accumulated_res['valid_covered']).item()
+    accumulated_res['valid_dura'] = np.sum(accumulated_res['valid_dura']).item()
     coverage = accumulated_res['all_covered'] / accumulated_res['all_dura'] if accumulated_res['all_dura'] > 0 else 0
+    coverage_valid = accumulated_res['valid_covered'] / accumulated_res['valid_dura'] if accumulated_res['valid_dura'] > 0 else 0
 
     summary = {
         'gt_all': gt_tp + gt_fn,
@@ -803,13 +864,15 @@ def summarize_whistle_results(accumulated_res):
         'dt_n':(dt_tp_valid + dt_fp),
         'precision_valid': precision_valid,
         'recall_valid': recall_valid,
+        'f1_valid': 2 * precision_valid * recall_valid / (precision_valid + recall_valid) if (precision_valid + recall_valid) > 0 else 0,
         'frag_valid': frag_valid,
-        'f1_valid': 2 * precision_valid * recall_valid / (precision_valid + recall_valid) if (precision_valid + recall_valid) > 0 else 0
-    }
+        'coverage_valid': coverage_valid,}
     return summary
 
 
 if __name__ == "__main__":
+    start = time.time()
+
     parser = argparse.ArgumentParser(description="Evaluate SAM on COCO dataset")
     parser.add_argument("--model_name", type=str, default="sam")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
@@ -847,6 +910,8 @@ if __name__ == "__main__":
     summary = summarize_whistle_results(res)
     rprint(f'evaluation based on unit {known_args.type}')
     rprint(summary)
-
+    end = time.time()
+    rtf = (end - start) / 6317.98790625
+    rprint(f"Total time: {end - start:.2f} seconds, RTF: {rtf:.4f}")
     
 
