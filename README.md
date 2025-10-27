@@ -11,6 +11,7 @@ pip install -e ./segment-anything/
 ffmpeg is required: `conda install ffmpeg`
 
 ## Training
+### Dataset
 Your dataset should be organized in the following structure:
 ```
 data
@@ -29,12 +30,16 @@ structure of meta.json:
 "test":[stem1, stem2,...]
 }
 ```
+### SAM Checkpoint
+The SAM checkpoint can be obtained from their [repo](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints) and put under `/sam_checkpoints`
+
+### Training
 You can train the model from scratch on your own dataset using the following command:
 ```shell
 python sam_whistle/main.py --model sam --batch_size 2 --device cuda:0 --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3
 ```
 ## Inference
-A trained model [checkpoint](https://drive.google.com/drive/folders/1LXkczIaOyIMcu4Zmiamgc6jbtw6rrupC?usp=sharing) for the DCLDE 2011 dataset can be downloaded and used (@0.5) for inference with:
+A trained SAM-whistle model [checkpoint](https://drive.google.com/drive/folders/1LXkczIaOyIMcu4Zmiamgc6jbtw6rrupC?usp=sharing) for the DCLDE 2011 dataset can be downloaded and used (@0.5) for inference with:
 ```shell
 python sam_whistle/evaluate/eval_tonal.py --use_conf --model sam --spect_cfg.normalize zscore --spect_cfg.no_center --spect_cfg.interp linear --spect_cfg.kernel_size 3 --log_dir logs/sam --min_thre 0.5 --max_thre 0.5
 ```
