@@ -72,7 +72,7 @@ class contour:
     time: float
     freq: float
 
-def tonal_save(stem, tonals, tonals_snr=None, model_name = 'mask2former'):
+def tonal_save(stem, tonals, tonals_snr=None, model_name = 'sam_whistle'):
     """Save the tonnals to a silbido binary file
     Args:
         tonnals: list of tonnals array
@@ -100,10 +100,11 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
     peaks = tracker.build_graph()
     tonals = tracker.get_tonals()
     res = tracker.compare_tonals()
+    
+    tonal_save(stem, tonals)
 
     if visualize:
         print(f"{'#'*30} Visualizing {stem} {'#'*30} to {output_dir}")
-        tonal_save(stem, tonals, None, model_name='sam')
         gt_tonals =[]
         for anno in tracker.gt_tonals:  # gt_tonals, gt_tonals_missed_valid, gt_tonals_valid
             gt = utils.anno_to_spect_point(anno, height = tracker.origin_shape[0])
@@ -252,7 +253,6 @@ if __name__ == "__main__":
     if not args.eval_multiple:
         if not cfg.debug:
             stem = None
-            stem = ["Qx-Dc-CC0411-TAT11-CH2-041114-154040-s","QX-Dc-FLIP0610-VLA-061015-165000"]
         else:
             stem = "Qx-Dc-CC0411-TAT11-CH2-041114-154040-s"
             stem = "QX-Dc-FLIP0610-VLA-061015-165000"
