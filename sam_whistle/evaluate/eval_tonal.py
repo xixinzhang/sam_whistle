@@ -112,7 +112,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
         gt_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, gt_tonals)
         kernel = np.ones((4, 4), np.uint8)
         gt_tonal_mask = cv2.dilate(gt_tonal_mask, kernel, iterations=1).astype(int)
-        gt_tonal_mask = gt_tonal_mask[-tracker.cfg.spect_cfg.crop_top: -tracker.cfg.spect_cfg.crop_bottom+1]
+        gt_tonal_mask = gt_tonal_mask[-tracker.cfg.spect_cfg.crop_top-1: -tracker.cfg.spect_cfg.crop_bottom]
         
         pred_tonals = []
         for anno in tonals:
@@ -120,7 +120,7 @@ def extract_tonals(tracker: TonalTracker, thre, visualize=False, output_dir=None
             pred_tonals.append(pred)
         pred_tonal_mask = utils.get_tonal_mask(tracker.origin_shape, pred_tonals)
         pred_tonal_mask = cv2.dilate(pred_tonal_mask, kernel, iterations=1).astype(int)
-        pred_tonal_mask = pred_tonal_mask[-tracker.cfg.spect_cfg.crop_top: -tracker.cfg.spect_cfg.crop_bottom+1]
+        pred_tonal_mask = pred_tonal_mask[-tracker.cfg.spect_cfg.crop_top-1: -tracker.cfg.spect_cfg.crop_bottom]
         for col in tracker.start_cols:
             raw_block = tracker.spect_raw[:, col: col + tracker.block_size]
             pred_block = tracker.spect_map[::-1, col: col + tracker.block_size]

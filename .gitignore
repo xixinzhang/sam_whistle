@@ -11,6 +11,9 @@ outputs/
 silbido*/
 *.png
 sam2
+notebooks/
+plot.ipynb
+plot.py
 
 __pycache__
 *.pth
